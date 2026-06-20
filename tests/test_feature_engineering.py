@@ -46,7 +46,7 @@ def dummy_events() -> pd.DataFrame:
                 "move", "emergency_exit",
             ],
             "hazard_distance": [10.0, 8.0, 3.0, 4.0, 6.0, 7.0, 9.0, 2.0, 11.0, 15.0],
-            "preparedness_level": ["High"] * n,
+            "preparedness_level": ["HIGH"] * n,
         }
     )
 
@@ -57,7 +57,7 @@ def multi_player_events(dummy_events: pd.DataFrame) -> pd.DataFrame:
     p2 = dummy_events.copy()
     p2["player_id"] = "p002"
     p2["scenario_type"] = "earthquake"
-    p2["preparedness_level"] = "Low"
+    p2["preparedness_level"] = "LOW"
     return pd.concat([dummy_events, p2], ignore_index=True)
 
 
@@ -121,7 +121,7 @@ def test_build_feature_table_columns(multi_player_events: pd.DataFrame) -> None:
 def test_build_feature_table_labels_preserved(multi_player_events: pd.DataFrame) -> None:
     feature_df = build_feature_table(multi_player_events)
     labels = set(feature_df["preparedness_level"].unique())
-    assert labels == {"High", "Low"}
+    assert labels == {"HIGH", "LOW"}
 
 
 def test_build_feature_table_no_nulls(multi_player_events: pd.DataFrame) -> None:

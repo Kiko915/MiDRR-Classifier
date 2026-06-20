@@ -18,7 +18,7 @@ Usage example::
         "panic_proxy": 15.3,
     })
     label = predict_preparedness(features)
-    print(label)  # "High", "Moderate", or "Low"
+    print(label)  # "HIGH", "MODERATE", or "LOW"
 
 Integration notes
 -----------------
@@ -75,7 +75,7 @@ def predict_preparedness(
     This is the primary API for external callers.  It accepts a single
     row of engineered features (as produced by
     :func:`~midrr_classifier.feature_engineering.build_feature_table`)
-    and returns one of ``{"High", "Moderate", "Low"}``.
+    and returns one of ``{"HIGH", "MODERATE", "LOW"}``.
 
     Args:
         features_row: A :class:`pandas.Series` whose index contains
@@ -86,8 +86,8 @@ def predict_preparedness(
         config_path: Optional YAML config path for column definitions.
 
     Returns:
-        Predicted preparedness level: ``"High"``, ``"Moderate"``, or
-        ``"Low"``.
+        Predicted preparedness level: ``"HIGH"``, ``"MODERATE"``, or
+        ``"LOW"``.
 
     Raises:
         FileNotFoundError: If the model file does not exist.

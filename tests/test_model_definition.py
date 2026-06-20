@@ -35,7 +35,7 @@ def tiny_dataset() -> tuple[np.ndarray, np.ndarray]:
     """Minimal labelled dataset with 3 classes for fit/predict checks."""
     rng = np.random.default_rng(42)
     X = rng.random((30, 6))
-    y = np.array(["High"] * 10 + ["Moderate"] * 10 + ["Low"] * 10)
+    y = np.array(["HIGH"] * 10 + ["MODERATE"] * 10 + ["LOW"] * 10)
     return X, y
 
 
@@ -82,7 +82,7 @@ def test_predict_valid_labels(
     X, y = tiny_dataset
     classifier.fit(X, y)
     preds = classifier.predict(X)
-    assert set(preds).issubset({"High", "Moderate", "Low"})
+    assert set(preds).issubset({"HIGH", "MODERATE", "LOW"})
 
 
 def test_predict_proba_shape(

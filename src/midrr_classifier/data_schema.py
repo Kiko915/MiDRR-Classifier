@@ -28,7 +28,7 @@ RAW_LOG_SCHEMA: dict[str, type] = {
     "event_type": str,      # e.g. "move", "door_open", "extinguisher_use",
                             #       "emergency_exit", "hazard_proximity"
     "hazard_distance": float,  # Euclidean distance to nearest hazard (blocks)
-    "preparedness_level": str, # "High" / "Moderate" / "Low"
+    "preparedness_level": str, # "HIGH" / "MODERATE" / "LOW"
                                # (repeated per row from the run-level label)
 }
 
@@ -53,7 +53,7 @@ FEATURE_SCHEMA: dict[str, type] = {
 # Valid target classes (ordered High → Low for consistent confusion matrices)
 # ---------------------------------------------------------------------------
 
-LABEL_CLASSES: list[str] = ["High", "Moderate", "Low"]
+LABEL_CLASSES: list[str] = ["HIGH", "MODERATE", "LOW"]
 
 # Minimum safe distance (in Minecraft blocks) used by hazard_avoidance_ratio.
 # TODO: Calibrate this threshold with domain experts / chapter 3 definitions.
