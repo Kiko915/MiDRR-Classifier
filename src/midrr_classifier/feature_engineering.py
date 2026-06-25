@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from midrr_classifier.data_schema import (
+    DECISION_DELAY_ACTION_TYPES,
     INTERACTION_EVENT_TYPES,
     SAFE_HAZARD_DISTANCE,
 )
@@ -37,15 +38,13 @@ logger = get_logger(__name__)
 
 
 def compute_evacuation_time(events_df: pd.DataFrame) -> float:
-    """Total scenario duration for the player.
+    """Seconds from scenario trigger (t=0) to reaching the assembly area.
 
-    Defined as the difference between the last and first recorded
-    timestamps.  A successful evacuation ends with an
-    ``emergency_exit`` event; the formula is agnostic to outcome and
-    simply measures elapsed time.
-
-    TODO: Decide whether to cap at the scenario time-limit or use the
-    actual exit timestamp for successful runs only.
+    True evacuation success = ``assembly_area_reached``, not ``emergency_exit``
+    (BFP: 'proceed to the closest assembly area'). If the player never reaches
+    the assembly area, the scenario time-limit is used as the cap (taken from
+    the ``session_end`` timestamp). Falls back to ``timestamp.max`` if
+    ``session_end`` is also absent.
 
     Args:
         events_df: Event log for a single player × run.
@@ -53,29 +52,40 @@ def compute_evacuation_time(events_df: pd.DataFrame) -> float:
     Returns:
         Elapsed seconds (≥ 0).
     """
-    if events_df.empty or len(events_df) < 2:
+    if events_df.empty:
         return 0.0
-    return float(events_df["timestamp"].max() - events_df["timestamp"].min())
+
+    assembly = events_df[events_df["event_type"] == "assembly_area_reached"]
+    if not assembly.empty:
+        return float(assembly["timestamp"].iloc[0])
+
+    session_end = events_df[events_df["event_type"] == "session_end"]
+    if not session_end.empty:
+        return float(session_end["timestamp"].iloc[0])
+
+    return float(events_df["timestamp"].max())
 
 
 def compute_decision_delay(events_df: pd.DataFrame) -> float:
-    """Latency from the first hazard exposure to the first valid action.
+    """Latency from the first hazard exposure to the first valid safety action.
 
-    "First hazard exposure" = first event where ``hazard_distance`` is
-    below :data:`~midrr_classifier.data_schema.SAFE_HAZARD_DISTANCE`.
-    "First valid action" = first ``emergency_exit``, ``door_open``, or
-    ``extinguisher_use`` event after that point.
+    "First hazard exposure" = first row where ``hazard_distance`` <
+    :data:`~midrr_classifier.data_schema.SAFE_HAZARD_DISTANCE`.
 
-    TODO: Refine the definition of "valid action" to match the
-    scenario-specific rubric from Chapter 3.
+    "First valid action" = first event in
+    :data:`~midrr_classifier.data_schema.DECISION_DELAY_ACTION_TYPES`
+    (``fire_alarm_activate``, ``door_open``, ``extinguisher_use``,
+    ``emergency_exit``) after that point. ``assembly_area_reached`` is
+    intentionally excluded — it is the evacuation endpoint, not an initial
+    safety reaction (telemetry_contract.md §4).
 
     Args:
         events_df: Event log for a single player × run, sorted by
             ``timestamp`` (ascending).
 
     Returns:
-        Delay in seconds.  Returns the total scenario duration if no
-        valid action is observed after hazard exposure (worst case).
+        Delay in seconds.  Returns the total scenario duration (worst-case
+        penalty) if no valid action is observed after hazard exposure.
     """
     df = events_df.sort_values("timestamp")
     hazard_rows = df[df["hazard_distance"] < SAFE_HAZARD_DISTANCE]
@@ -84,10 +94,9 @@ def compute_decision_delay(events_df: pd.DataFrame) -> float:
 
     hazard_time = hazard_rows["timestamp"].iloc[0]
     post_hazard = df[df["timestamp"] >= hazard_time]
-    action_rows = post_hazard[post_hazard["event_type"].isin(INTERACTION_EVENT_TYPES)]
+    action_rows = post_hazard[post_hazard["event_type"].isin(DECISION_DELAY_ACTION_TYPES)]
 
     if action_rows.empty:
-        # No action taken — penalise with full scenario duration
         return compute_evacuation_time(df)
 
     return float(action_rows["timestamp"].iloc[0] - hazard_time)
@@ -96,14 +105,16 @@ def compute_decision_delay(events_df: pd.DataFrame) -> float:
 def compute_path_efficiency(events_df: pd.DataFrame) -> float:
     """Ratio of straight-line displacement to total path length.
 
-    A value close to 1 indicates a direct route to the exit; a value
-    close to 0 indicates excessive backtracking or panic-like movement.
+    Straight-line distance is measured from the player's spawn position
+    (first ``move`` row) to the **evacuation endpoint**: the position
+    recorded on the ``assembly_area_reached`` event, or the final ``move``
+    position if the player never reached the assembly area. Only ``move``
+    events up to the evacuation endpoint are included in the path (no
+    post-evacuation wandering inflates the denominator).
 
     Formula::
 
-        path_efficiency = straight_line_distance / cumulative_path_length
-
-    TODO: Filter to ``move`` events only; include Y-axis in 3-D distance.
+        path_efficiency = straight_line(start → endpoint) / cumulative_path_length
 
     Args:
         events_df: Event log for a single player × run.
@@ -112,23 +123,39 @@ def compute_path_efficiency(events_df: pd.DataFrame) -> float:
         Path efficiency ratio in (0, 1].  Returns 1.0 if the player
         did not move (degenerate case).
     """
-    moves = events_df[events_df["event_type"] == "move"].sort_values("timestamp")
+    # Determine the time-cut and target position for the evacuation endpoint.
+    assembly = events_df[events_df["event_type"] == "assembly_area_reached"]
+    if not assembly.empty:
+        t_end = float(assembly["timestamp"].iloc[0])
+        endpoint = assembly[["x", "y", "z"]].iloc[0].to_numpy(dtype=float)
+    else:
+        session_end = events_df[events_df["event_type"] == "session_end"]
+        t_end = (
+            float(session_end["timestamp"].iloc[0])
+            if not session_end.empty
+            else float(events_df["timestamp"].max())
+        )
+        endpoint = None  # fall back to last move position below
+
+    moves = events_df[
+        (events_df["event_type"] == "move") & (events_df["timestamp"] <= t_end)
+    ].sort_values("timestamp")
+
     if len(moves) < 2:
         return 1.0
 
-    coords = moves[["x", "y", "z"]].to_numpy()
+    coords = moves[["x", "y", "z"]].to_numpy(dtype=float)
+    start = coords[0]
+    end = endpoint if endpoint is not None else coords[-1]
 
-    # Straight-line displacement (start → end)
-    straight = float(np.linalg.norm(coords[-1] - coords[0]))
-
-    # Cumulative step-by-step path length
+    straight = float(np.linalg.norm(end - start))
     steps = np.linalg.norm(np.diff(coords, axis=0), axis=1)
     total_path = float(steps.sum())
 
     if total_path == 0.0:
         return 1.0
 
-    return min(straight / total_path, 1.0)  # clamp to [0, 1]
+    return min(straight / total_path, 1.0)
 
 
 def compute_hazard_avoidance_ratio(events_df: pd.DataFrame) -> float:
@@ -152,11 +179,13 @@ def compute_hazard_avoidance_ratio(events_df: pd.DataFrame) -> float:
 
 
 def compute_interaction_frequency(events_df: pd.DataFrame) -> float:
-    """Rate of safety-relevant interactions per second of scenario time.
+    """Rate of qualifying safety interactions per second of scenario time.
 
-    Safety interactions are: ``door_open``, ``extinguisher_use``, and
-    ``emergency_exit`` (see
-    :data:`~midrr_classifier.data_schema.INTERACTION_EVENT_TYPES`).
+    Qualifying events are those in
+    :data:`~midrr_classifier.data_schema.INTERACTION_EVENT_TYPES`, with one
+    exception: ``extinguisher_use`` is excluded when ``nearby_player_count``
+    is 0 (BFP rule: *"DO NOT FIGHT FIRE IF ALONE"*). Solo extinguisher use is
+    a procedure violation and must not raise the frequency score.
 
     Args:
         events_df: Event log for a single player × run.
@@ -167,8 +196,17 @@ def compute_interaction_frequency(events_df: pd.DataFrame) -> float:
     duration = compute_evacuation_time(events_df)
     if duration == 0.0:
         return 0.0
-    count = events_df["event_type"].isin(INTERACTION_EVENT_TYPES).sum()
-    return float(count / duration)
+
+    qualifying = events_df["event_type"].isin(INTERACTION_EVENT_TYPES)
+
+    # Remove extinguisher_use rows where the student was alone.
+    if "nearby_player_count" in events_df.columns:
+        solo_ext = (events_df["event_type"] == "extinguisher_use") & (
+            events_df["nearby_player_count"].fillna(0) == 0
+        )
+        qualifying = qualifying & ~solo_ext
+
+    return float(qualifying.sum() / duration)
 
 
 def compute_panic_proxy(events_df: pd.DataFrame) -> float:

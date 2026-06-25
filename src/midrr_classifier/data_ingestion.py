@@ -73,45 +73,75 @@ def split_train_test(
     df: pd.DataFrame,
     test_size: float = 0.3,
     stratify_col: str = "preparedness_level",
+    group_col: str = "player_id",
     random_state: int = 42,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Split a feature table into stratified train and test sets.
+    """Group-aware stratified split of a feature table.
 
-    Stratification ensures that the class distribution of
-    ``preparedness_level`` is preserved in both splits, which is
-    important given the relatively small expected sample size.
+    **Why group-aware?**
+    A student (``player_id``) may have sessions for both FIRE and
+    EARTHQUAKE.  A naive row-level split could place that student's fire
+    session in train and earthquake session in test.  The model would
+    then see the student's behavioural signature during training, which
+    inflates test-set performance and prevents generalisation to new
+    students — the actual deployment scenario.
+
+    This function splits at the **player level**: every row belonging to
+    a given ``player_id`` goes entirely into train or entirely into test.
+
+    Stratification is performed on each player's modal
+    ``preparedness_level`` so that class proportions are approximately
+    preserved in both splits despite the group constraint.
 
     Args:
         df: Feature table (output of
             :func:`~midrr_classifier.feature_engineering.build_feature_table`
             or loaded via :func:`load_feature_table`).
-        test_size: Fraction of rows to place in the test set.
-        stratify_col: Column to use for stratified sampling.
+        test_size: Fraction of **players** (not rows) to place in the
+            test set.
+        stratify_col: Column used for class-balanced sampling.
+            Must be present in *df*.
+        group_col: Column whose values define the groups that must not
+            span train and test.  Defaults to ``"player_id"``.
         random_state: Seed for reproducibility.
 
     Returns:
-        A ``(train_df, test_df)`` tuple, both as
-        :class:`pandas.DataFrame`.
+        A ``(train_df, test_df)`` tuple.  No ``player_id`` appears in
+        both splits.
 
     Raises:
-        ValueError: If *stratify_col* is not present in *df*.
+        ValueError: If *stratify_col* or *group_col* is absent from *df*.
+        ValueError: If any class has fewer groups than required for a
+            stratified split (mirrors sklearn behaviour).
     """
-    if stratify_col not in df.columns:
-        raise ValueError(
-            f"Stratify column '{stratify_col}' not found in DataFrame."
-        )
+    for col in (stratify_col, group_col):
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in DataFrame.")
 
-    train_df, test_df = _sklearn_split(
-        df,
+    # One row per player: use modal label for stratification.
+    group_summary = (
+        df.groupby(group_col)[stratify_col]
+        .agg(lambda s: s.mode().iloc[0])
+        .reset_index()
+        .rename(columns={stratify_col: "_strat_label"})
+    )
+
+    train_groups, test_groups = _sklearn_split(
+        group_summary[group_col],
         test_size=test_size,
-        stratify=df[stratify_col],
+        stratify=group_summary["_strat_label"],
         random_state=random_state,
     )
 
+    train_ids: set = set(train_groups)
+    test_ids: set = set(test_groups)
+
+    train_df = df[df[group_col].isin(train_ids)].reset_index(drop=True)
+    test_df = df[df[group_col].isin(test_ids)].reset_index(drop=True)
+
     logger.info(
-        "Split → train: %d rows, test: %d rows (stratified on '%s')",
-        len(train_df),
-        len(test_df),
-        stratify_col,
+        "Group-aware split → train: %d rows (%d players), test: %d rows (%d players)",
+        len(train_df), len(train_ids),
+        len(test_df), len(test_ids),
     )
-    return train_df.reset_index(drop=True), test_df.reset_index(drop=True)
+    return train_df, test_df
