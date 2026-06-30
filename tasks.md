@@ -32,8 +32,8 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 - [x] Write `docs/telemetry_contract.md` v1.1 with JSON + CSV shapes, per-tick vs per-event spec, full event vocabulary
 - [x] Document required new mod instrumentation (per-tick `x/y/z`, `hazard_distance`, `fire_alarm_activate`, `assembly_area_reached`, `nearby_player_count`, `map_metadata.json`)
-- [ ] **Send `telemetry_contract.md` to Necookie with a hard deadline** — this starts the clock on the longest pole
-- [ ] Agree on transport layer: PostgreSQL direct read vs batched CSV export; add a Postgres loader to `data_ingestion.py` alongside the CSV loader
+- [x] **Send `telemetry_contract.md` to Necookie with a hard deadline** — this starts the clock on the longest pole
+- [x] Agree on transport layer: **batched CSV export** (PostgreSQL direct read dropped)
 
 ---
 

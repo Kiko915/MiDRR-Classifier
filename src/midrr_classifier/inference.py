@@ -104,3 +104,56 @@ def predict_preparedness(
 
     logger.debug("predict_preparedness → %s", prediction)
     return prediction
+
+
+def predict_preparedness_full(
+    features_row: pd.Series,
+    model_path: str | None = None,
+    config_path: str | None = None,
+) -> dict:
+    """Extended prediction returning label, class probabilities, and feature importances.
+
+    Use this function in the REST API layer.  The plain
+    :func:`predict_preparedness` is kept for callers that only need the label.
+
+    Args:
+        features_row: A :class:`pandas.Series` with the six engineered feature
+            values (see :attr:`~midrr_classifier.config.MiDRRConfig.feature_cols`).
+        model_path: Path to a trained model ``.pkl`` file.
+        config_path: Optional YAML config path.
+
+    Returns:
+        A dict with three keys:
+
+        - ``"label"`` – predicted class string (``"HIGH"``, ``"MODERATE"``, ``"LOW"``)
+        - ``"probabilities"`` – ``{class: float}`` confidence per class, sums to 1.0
+        - ``"feature_importances"`` – ``{feature_name: float}`` global Gini importance
+          per feature, also sums to 1.0.  Replace with SHAP in Phase 6.
+
+    Raises:
+        FileNotFoundError: If the model file does not exist.
+        KeyError: If *features_row* is missing a required feature.
+    """
+    cfg = load_config(config_path)
+    resolved_model_path = model_path or cfg.model_path
+
+    classifier = _get_cached_classifier(resolved_model_path, config_path)
+
+    feature_vector = features_row[cfg.feature_cols].to_numpy().reshape(1, -1)
+
+    label: str = classifier.predict(feature_vector)[0]
+    proba = classifier.predict_proba(feature_vector)[0]
+    classes: list[str] = classifier.model.classes_.tolist()
+
+    probabilities = {cls: float(p) for cls, p in zip(classes, proba)}
+    importances = {
+        feat: float(imp)
+        for feat, imp in zip(cfg.feature_cols, classifier.model.feature_importances_)
+    }
+
+    logger.debug("predict_preparedness_full → %s (proba=%s)", label, probabilities)
+    return {
+        "label": label,
+        "probabilities": probabilities,
+        "feature_importances": importances,
+    }

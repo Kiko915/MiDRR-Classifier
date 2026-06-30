@@ -87,6 +87,15 @@ All synthetic data must be labeled as such. The web repo insists on this separat
 - No REST API yet — `midrr-api` FastAPI service is a planned separate deliverable.
 - `SAFE_HAZARD_DISTANCE = 5.0` (blocks) in `data_schema.py` is a placeholder; calibrate with domain experts.
 
+## Developer background
+
+The developer on this repo (**Kiko**) is primarily a fullstack web developer (React/Next.js frontend, Node/Python backend). He is **not** an ML specialist — this is a thesis requirement. When explaining ML concepts, always:
+- Use web-dev analogies (REST APIs, database transforms, JSON schemas, validation pipelines)
+- Explain the "why" behind every ML choice in plain language before showing code
+- Avoid assuming ML background knowledge (no unexplained jargon like "Gini impurity", "overfitting", "hyperparameter" without a one-line definition in context)
+- Prefer showing what a function *does to data* (input → output shape) rather than the math formula
+- When referencing a phase or task, briefly state what it means and why it matters before getting into specifics
+
 ## Commit style
 
 Do not add `Co-Authored-By: Claude` trailers to commits in this repo.
