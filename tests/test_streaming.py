@@ -50,12 +50,13 @@ class TestSessionBuffer:
         df = buf.ingest([ev])
         assert "move" in df["event_type"].values
 
-    def test_ingest_normalizes_ccs_fire(self):
+    def test_ingest_preserves_ccs_fire(self):
+        # ccs_fire is a distinct canonical scenario type — must NOT be collapsed to fire.
         buf = SessionBuffer("s1", "p1", "ccs_fire")
         ev = _move(1.0, 0.0, 0.0)
         ev["scenario_type"] = "ccs_fire"
         df = buf.ingest([ev])
-        assert "fire" in df["scenario_type"].values
+        assert "ccs_fire" in df["scenario_type"].values
 
     def test_event_count_accumulates(self):
         buf = SessionBuffer("s1", "p1", "fire")
@@ -140,7 +141,8 @@ class TestStreamingPredictorNoModel:
 
         assert snap.event_count == len(batch1) + len(batch2)
 
-    def test_mod_aliases_normalised_in_update(self):
+    def test_move_tick_normalised_ccs_fire_preserved(self):
+        # move_tick → move; ccs_fire stays as ccs_fire (distinct building).
         events = [_move(0.1, 100.0, 100.0)]
         events[0]["event_type"] = "move_tick"
         events[0]["scenario_type"] = "ccs_fire"

@@ -56,6 +56,45 @@ FEATURE_SCHEMA: dict[str, type] = {
 
 LABEL_CLASSES: list[str] = ["HIGH", "MODERATE", "LOW"]
 
+# ---------------------------------------------------------------------------
+# Valid scenario types  (4 distinct values — do NOT collapse ccs_fire → fire)
+# ccs_* scenarios take place in the CCS Admin Building (different assembly zone).
+# fire / earthquake scenarios take place in the Library building.
+# Source: BERONG_SMP_WEB/apps/dashboard/src/lib/floorplans.ts
+# ---------------------------------------------------------------------------
+
+SCENARIO_TYPES: set[str] = {"fire", "earthquake", "ccs_fire", "ccs_earthquake"}
+
+# ---------------------------------------------------------------------------
+# Map metadata — assembly zone bounds per scenario type
+# Used by compute_path_efficiency() as the fallback evacuation endpoint when
+# assembly_area_reached was never logged (e.g. player ran out of time).
+# Coordinates are Minecraft world XZ; Y is omitted (horizontal plane only).
+# Source: BERONG_SMP_WEB/apps/dashboard/src/lib/floorplans.ts (verified)
+# ---------------------------------------------------------------------------
+
+# Centre of each assembly zone in world XZ coordinates.
+# path_efficiency_ratio uses centre as the "ideal" endpoint when the event is absent.
+ASSEMBLY_ZONE_CENTRE: dict[str, tuple[float, float]] = {
+    "ccs_fire":       (106.0, 81.5),   # CCS Admin: X:76–136, Z:73–90
+    "ccs_earthquake": (106.0, 81.5),
+    "fire":           (53.0,  73.0),   # Library:   X:30–76,  Z:64–82
+    "earthquake":     (53.0,  73.0),
+}
+
+# Full assembly zone rectangles (for validation / future use).
+ASSEMBLY_ZONE_BOUNDS: dict[str, dict[str, float]] = {
+    "ccs_fire":       {"xMin": 76, "xMax": 136, "zMin": 73, "zMax": 90},
+    "ccs_earthquake": {"xMin": 76, "xMax": 136, "zMin": 73, "zMax": 90},
+    "fire":           {"xMin": 30, "xMax": 76,  "zMin": 64, "zMax": 82},
+    "earthquake":     {"xMin": 30, "xMax": 76,  "zMin": 64, "zMax": 82},
+}
+
+# Y-coordinate boundary separating ground and upper floors in the CCS building.
+# ground floor: y <= CCS_FLOOR_Y_BOUNDARY  |  upper floor: y > CCS_FLOOR_Y_BOUNDARY
+# Source: floorplans.ts CCS_FLOOR_Y_BOUNDARY = -26
+CCS_FLOOR_Y_BOUNDARY: float = -26.0
+
 # Minimum safe distance (in Minecraft blocks) used by hazard_avoidance_ratio.
 # BFP plan specifies 2–3 m clearance; 5.0 blocks is a conservative starting proxy.
 # Calibrate with domain experts / BFP officers during Phase 4.

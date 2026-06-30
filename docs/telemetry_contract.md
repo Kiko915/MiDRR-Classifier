@@ -44,7 +44,7 @@ Every required field below maps to at least one model feature or rubric dimensio
 | Time unit | Seconds since trigger, float. Minecraft runs at 20 ticks/sec, so `seconds = tick_count / 20.0`. |
 | Sampling rate (movement) | **20 Hz** (every tick — matches Minecraft's native tick rate). This is the required rate for real-time analysis. Do not go below 5 Hz for batch-only use cases. |
 | Events | Logged the instant they happen (not sampled). |
-| `scenario_type` casing | Emit lowercase `fire` / `earthquake`. (Mod enum `FIRE`/`EARTHQUAKE` → lowercase on export.) |
+| `scenario_type` values | Four distinct canonical values: `fire`, `earthquake`, `ccs_fire`, `ccs_earthquake`. `ccs_*` = CCS Admin Building; `fire`/`earthquake` = Library Building. **Do NOT collapse** — different buildings have different assembly zones and room layouts. Match the database `simulation_type` enum in lowercase. |
 | Player identity | Emit a stable `player_id` (UUID or pseudonymized ID). One value per student for the whole study so labels and sessions join correctly. |
 | Character encoding | UTF-8, no BOM. |
 

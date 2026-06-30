@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from midrr_classifier.data_schema import (
+    ASSEMBLY_ZONE_CENTRE,
     DECISION_DELAY_ACTION_TYPES,
     INTERACTION_EVENT_TYPES,
     SAFE_HAZARD_DISTANCE,
@@ -135,7 +136,19 @@ def compute_path_efficiency(events_df: pd.DataFrame) -> float:
             if not session_end.empty
             else float(events_df["timestamp"].max())
         )
-        endpoint = None  # fall back to last move position below
+        # Use the known assembly-zone centre for the scenario type as the ideal
+        # endpoint; fall back to the last recorded move position if unknown.
+        scenario = (
+            events_df["scenario_type"].iloc[0]
+            if "scenario_type" in events_df.columns
+            else None
+        )
+        if scenario and scenario in ASSEMBLY_ZONE_CENTRE:
+            cx, cz = ASSEMBLY_ZONE_CENTRE[scenario]
+            y_val = float(events_df["y"].iloc[-1]) if "y" in events_df.columns else 0.0
+            endpoint = np.array([cx, y_val, cz])
+        else:
+            endpoint = None  # fall back to last move position below
 
     moves = events_df[
         (events_df["event_type"] == "move") & (events_df["timestamp"] <= t_end)

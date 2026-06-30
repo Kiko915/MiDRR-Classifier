@@ -16,12 +16,11 @@ from midrr_classifier.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-# Mod v0 emits these names; canonical names are defined in telemetry_contract.md §2/§4.
+# Mod v0 emits these event_type names; canonical names are defined in telemetry_contract.md §4.
+# scenario_type has NO aliases — ccs_fire / ccs_earthquake / fire / earthquake are all
+# distinct canonical values (different buildings, different assembly zones).
 # Remove an entry here once the mod is updated to emit the canonical name directly.
-_SCENARIO_TYPE_ALIASES: dict[str, str] = {
-    "ccs_fire": "fire",
-    "ccs_earthquake": "earthquake",
-}
+_SCENARIO_TYPE_ALIASES: dict[str, str] = {}
 _EVENT_TYPE_ALIASES: dict[str, str] = {
     "move_tick": "move",
 }
