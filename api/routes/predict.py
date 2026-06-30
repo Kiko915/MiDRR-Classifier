@@ -3,8 +3,12 @@
 Flow (same as any REST handler you've written before):
   1. FastAPI deserialises the JSON body into FeaturesRequest (Pydantic validates it)
   2. We build a pandas Series from those 6 feature values (the format inference.py expects)
-  3. We call predict_preparedness_full() which returns label + probabilities + importances
-  4. We build the PredictResponse JSON and return it
+  3. We call predict_preparedness_full() which returns label + probabilities + SHAP values
+  4. We sort features by |SHAP| (highest absolute impact first) and build the response
+
+featureImportance weights are now per-student SHAP values (can be negative):
+  positive weight → that feature pushed the prediction toward prepLevel
+  negative weight → that feature actually helped the student (a relative strength)
 
 Error handling:
   - Model not trained yet (FileNotFoundError) → 503 Service Unavailable
@@ -63,22 +67,25 @@ def predict(body: FeaturesRequest) -> PredictResponse:
 
     label: str = result["label"]
     probabilities: dict[str, float] = result["probabilities"]
-    importances: dict[str, float] = result["feature_importances"]
+    shap_vals: dict[str, float] = result["shap_values"]
 
     # prepScore = probability of the predicted class, scaled to 0–100.
-    # Example: model is 87% confident → prepScore = 87.
+    # Example: model is 87% confident the student is LOW → prepScore = 87.
     prep_score = round(probabilities.get(label, 0.0) * 100)
 
-    # Sort features by importance weight, highest first.
-    sorted_importances = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+    # Sort by ABSOLUTE SHAP value — highest impact first regardless of direction.
+    # The sign (positive/negative) is preserved in the weight field so the
+    # dashboard can display direction if it chooses to.
+    sorted_shap = sorted(shap_vals.items(), key=lambda x: abs(x[1]), reverse=True)
     feature_importance_list = [
-        FeatureWeight(feature=feat, weight=round(weight, 4))
-        for feat, weight in sorted_importances
+        FeatureWeight(feature=feat, weight=round(val, 4))
+        for feat, val in sorted_shap
     ]
 
-    # The top feature (highest importance) personalises the feedback message.
-    top_feature = sorted_importances[0][0] if sorted_importances else "evacuation_time"
-    result_text = generate_result_text(label, top_feature)
+    # The top feature is the one with highest |SHAP| — most influential for this student.
+    top_feature = sorted_shap[0][0] if sorted_shap else "evacuation_time"
+    top_shap_value = sorted_shap[0][1] if sorted_shap else 0.0
+    result_text = generate_result_text(label, top_feature, top_shap_value, shap_vals)
 
     return PredictResponse(
         prepLevel=label,

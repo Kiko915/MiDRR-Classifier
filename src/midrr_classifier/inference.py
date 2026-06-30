@@ -39,6 +39,7 @@ from functools import lru_cache
 import pandas as pd
 
 from midrr_classifier.config import MiDRRConfig, load_config
+from midrr_classifier.explainability import compute_shap_values
 from midrr_classifier.model_definition import MiDRRClassifier
 from midrr_classifier.utils.logging_utils import get_logger
 
@@ -146,14 +147,27 @@ def predict_preparedness_full(
     classes: list[str] = classifier.model.classes_.tolist()
 
     probabilities = {cls: float(p) for cls, p in zip(classes, proba)}
-    importances = {
+
+    # Global Gini importance — same for every student, kept for training diagnostics.
+    global_importances = {
         feat: float(imp)
         for feat, imp in zip(cfg.feature_cols, classifier.model.feature_importances_)
     }
+
+    # Per-student SHAP values — different for every prediction.
+    # Positive = pushed toward the predicted label; negative = pushed away (a strength).
+    shap_contributions = compute_shap_values(
+        rf_model=classifier.model,
+        feature_vector=feature_vector,
+        classes=classes,
+        predicted_label=label,
+        feature_cols=cfg.feature_cols,
+    )
 
     logger.debug("predict_preparedness_full → %s (proba=%s)", label, probabilities)
     return {
         "label": label,
         "probabilities": probabilities,
-        "feature_importances": importances,
+        "shap_values": shap_contributions,
+        "feature_importances": global_importances,
     }
