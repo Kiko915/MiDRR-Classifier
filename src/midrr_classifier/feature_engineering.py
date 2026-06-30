@@ -269,7 +269,11 @@ def build_feature_table(events_df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Building features for %d player×run groups.", len(groups))
 
     for (player_id, scenario_type), group in groups:
-        label = group["preparedness_level"].iloc[0]
+        label = (
+            group["preparedness_level"].iloc[0]
+            if "preparedness_level" in group.columns
+            else None
+        )
 
         record: dict = {
             "player_id": player_id,
