@@ -42,7 +42,7 @@ Every required field below maps to at least one model feature or rubric dimensio
 | Distance unit | Minecraft blocks (1 block = 1 meter, treat as float) |
 | Time anchor | `t = 0.0` is the **disaster trigger tick** (the moment the fire/earthquake starts), **not** world join. Pre-trigger samples may be logged with negative `t` or omitted — see §6. |
 | Time unit | Seconds since trigger, float. Minecraft runs at 20 ticks/sec, so `seconds = tick_count / 20.0`. |
-| Sampling rate (movement) | Default **10 Hz** (every 2 ticks). Configurable. Higher = better `path_efficiency_ratio` and `panic_proxy`; lower = smaller files. Do not go below 5 Hz. |
+| Sampling rate (movement) | **20 Hz** (every tick — matches Minecraft's native tick rate). This is the required rate for real-time analysis. Do not go below 5 Hz for batch-only use cases. |
 | Events | Logged the instant they happen (not sampled). |
 | `scenario_type` casing | Emit lowercase `fire` / `earthquake`. (Mod enum `FIRE`/`EARTHQUAKE` → lowercase on export.) |
 | Player identity | Emit a stable `player_id` (UUID or pseudonymized ID). One value per student for the whole study so labels and sessions join correctly. |
@@ -120,9 +120,17 @@ Even though the six current features are per-event, capture these per-session fi
 
 ---
 
-## 6. Real-time format (Phase 7, optional)
+## 6. Real-time streaming format (Phase 7)
 
-For live `/predict` integration, the mod POSTs one JSON object at `session_end`:
+The mod samples at **20 Hz** (every Minecraft tick) and POSTs accumulated events to the API every **5 seconds** (~100 move rows per batch). The API maintains a per-session buffer, recomputes features on each batch, and returns a live prediction snapshot the dashboard displays in real time.
+
+### 6a. Endpoint
+
+```
+POST /session/{session_id}/events
+```
+
+### 6b. Request body
 
 ```json
 {
@@ -130,26 +138,58 @@ For live `/predict` integration, the mod POSTs one JSON object at `session_end`:
   "session_id": "sess_a91f",
   "player_id": "stu_0412",
   "scenario_type": "fire",
-  "session": {
-    "duration_ticks": 4200,
-    "end_reason": "assembly_reached",
-    "fires_extinguished_count": 0
-  },
   "events": [
-    {"t": 0.0,  "type": "session_start", "x": 100.0, "y": 64.0, "z": -80.0, "hazard_distance": 18.0},
-    {"t": 0.2,  "type": "move", "x": 100.4, "y": 64.0, "z": -80.3, "hazard_distance": 17.6},
-    {"t": 2.1,  "type": "fire_alarm_activate", "x": 101.0, "y": 64.0, "z": -80.5, "hazard_distance": 16.9},
-    {"t": 3.1,  "type": "extinguisher_use", "x": 104.0, "y": 64.0, "z": -82.0, "hazard_distance": 4.2, "nearby_player_count": 0},
-    {"t": 19.8, "type": "emergency_exit", "x": 130.0, "y": 64.0, "z": -95.0, "hazard_distance": 22.0},
-    {"t": 24.5, "type": "assembly_area_reached", "x": 150.0, "y": 64.0, "z": -110.0, "hazard_distance": 40.0},
-    {"t": 24.6, "type": "session_end", "x": 150.0, "y": 64.0, "z": -110.0, "hazard_distance": 40.0}
+    {"timestamp": 0.0,  "event_type": "session_start", "x": 100.0, "y": 64.0, "z": -80.0, "hazard_distance": 18.0},
+    {"timestamp": 0.05, "event_type": "move",          "x": 100.2, "y": 64.0, "z": -80.1, "hazard_distance": 17.8},
+    {"timestamp": 0.10, "event_type": "move",          "x": 100.4, "y": 64.0, "z": -80.3, "hazard_distance": 17.6},
+    {"timestamp": 2.1,  "event_type": "fire_alarm_activate", "x": 101.0, "y": 64.0, "z": -80.5, "hazard_distance": 16.9},
+    {"timestamp": 3.1,  "event_type": "extinguisher_use", "x": 104.0, "y": 64.0, "z": -82.0, "hazard_distance": 4.2, "nearby_player_count": 0}
   ]
 }
 ```
 
-> Note this example: the player evacuated to assembly but used an extinguisher **while alone** (`nearby_player_count: 0`) — a procedure violation the rubric penalizes despite the successful evacuation. That nuance is only visible because of the new field.
+- Send **only new events** since the last POST — the API accumulates them internally.
+- The `session_start` event must be in the **first batch** only.
+- The `session_end` event must be in the **final batch**; the API closes the buffer after receiving it.
+- POST interval: every **5 seconds** (configurable). Lower = smoother dashboard; higher = fewer requests. Do not exceed 1 second — the server is single-process for the thesis demo.
 
-The API runs `build_feature_table()` on `events`, predicts, and returns the dashboard contract (`prepLevel`, `prepScore`, `featureImportance`, `resultText`). For a thesis, **batch CSV (§3) is lower-risk**; do real-time only if time allows.
+### 6c. Response
+
+```json
+{
+  "session_id": "sess_a91f",
+  "player_id": "stu_0412",
+  "scenario_type": "fire",
+  "elapsed_time": 5.0,
+  "event_count": 102,
+  "is_complete": false,
+  "features": {
+    "evacuation_time": 5.0,
+    "decision_delay": 0.0,
+    "path_efficiency_ratio": 0.72,
+    "hazard_avoidance_ratio": 0.91,
+    "interaction_frequency": 0.04,
+    "panic_proxy": 12.3
+  },
+  "prediction": "HIGH",
+  "prep_score": 78.4
+}
+```
+
+- `prediction` is `null` until a trained model is loaded on the server.
+- `prep_score` is the winning class probability scaled to 0–100.
+- `is_complete` becomes `true` once `assembly_area_reached` is received; the dashboard can then show the final result.
+- Features computed on **partial data** are meaningful: e.g. `hazard_avoidance_ratio` is the fraction of ticks at safe distance *so far*, not the final value.
+
+### 6d. Session lifecycle
+
+```
+POST /session/{id}/events   ← first batch (contains session_start)
+POST /session/{id}/events   ← subsequent batches (5 s intervals)
+...
+POST /session/{id}/events   ← final batch (contains session_end)
+DELETE /session/{id}        ← optional explicit cleanup (API auto-closes on session_end)
+```
 
 ---
 

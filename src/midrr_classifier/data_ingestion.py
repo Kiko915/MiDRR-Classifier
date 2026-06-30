@@ -27,7 +27,12 @@ _EVENT_TYPE_ALIASES: dict[str, str] = {
 }
 
 
-def _normalize_raw_log(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_raw_log(df: pd.DataFrame) -> pd.DataFrame:
+    """Map mod v0 event/scenario names to canonical contract names.
+
+    Safe to call on already-normalized data — aliases that are not present
+    are silently ignored by ``DataFrame.replace``.
+    """
     df = df.copy()
     df["scenario_type"] = df["scenario_type"].replace(_SCENARIO_TYPE_ALIASES)
     df["event_type"] = df["event_type"].replace(_EVENT_TYPE_ALIASES)
@@ -55,7 +60,7 @@ def load_raw_logs(path: str) -> pd.DataFrame:
 
     logger.info("Loading raw logs from %s", path)
     df = pd.read_csv(path)
-    df = _normalize_raw_log(df)
+    df = normalize_raw_log(df)
     validate_raw_schema(df)
     logger.info("Loaded %d event rows from %s", len(df), path)
     return df

@@ -202,7 +202,7 @@ def compute_interaction_frequency(events_df: pd.DataFrame) -> float:
     # Remove extinguisher_use rows where the student was alone.
     if "nearby_player_count" in events_df.columns:
         solo_ext = (events_df["event_type"] == "extinguisher_use") & (
-            events_df["nearby_player_count"].fillna(0) == 0
+            pd.to_numeric(events_df["nearby_player_count"], errors="coerce").fillna(0) == 0
         )
         qualifying = qualifying & ~solo_ext
 
