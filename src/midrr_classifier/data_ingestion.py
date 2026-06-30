@@ -16,6 +16,23 @@ from midrr_classifier.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Mod v0 emits these names; canonical names are defined in telemetry_contract.md §2/§4.
+# Remove an entry here once the mod is updated to emit the canonical name directly.
+_SCENARIO_TYPE_ALIASES: dict[str, str] = {
+    "ccs_fire": "fire",
+    "ccs_earthquake": "earthquake",
+}
+_EVENT_TYPE_ALIASES: dict[str, str] = {
+    "move_tick": "move",
+}
+
+
+def _normalize_raw_log(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["scenario_type"] = df["scenario_type"].replace(_SCENARIO_TYPE_ALIASES)
+    df["event_type"] = df["event_type"].replace(_EVENT_TYPE_ALIASES)
+    return df
+
 
 def load_raw_logs(path: str) -> pd.DataFrame:
     """Load raw gameplay event logs from a CSV file.
@@ -38,6 +55,7 @@ def load_raw_logs(path: str) -> pd.DataFrame:
 
     logger.info("Loading raw logs from %s", path)
     df = pd.read_csv(path)
+    df = _normalize_raw_log(df)
     validate_raw_schema(df)
     logger.info("Loaded %d event rows from %s", len(df), path)
     return df

@@ -20,7 +20,7 @@ import pandas as pd
 
 RAW_LOG_SCHEMA: dict[str, type] = {
     "player_id": str,       # Unique player / student identifier
-    "scenario_type": str,   # "fire" or "earthquake"
+    "scenario_type": str,   # "fire" or "earthquake" (canonical, post-normalization)
     "timestamp": float,     # Seconds since scenario start
     "x": float,             # Player X coordinate in Minecraft world
     "y": float,             # Player Y coordinate (height)
@@ -28,8 +28,9 @@ RAW_LOG_SCHEMA: dict[str, type] = {
     "event_type": str,      # e.g. "move", "door_open", "extinguisher_use",
                             #       "emergency_exit", "hazard_proximity"
     "hazard_distance": float,  # Euclidean distance to nearest hazard (blocks)
-    "preparedness_level": str, # "HIGH" / "MODERATE" / "LOW"
-                               # (repeated per row from the run-level label)
+    # NOTE: preparedness_level is deliberately absent — raw logs must not contain
+    # labels. Labels are joined later from the expert-scoring spreadsheet keyed on
+    # session_id. See telemetry_contract.md §3.
 }
 
 # ---------------------------------------------------------------------------
