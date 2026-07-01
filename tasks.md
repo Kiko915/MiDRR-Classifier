@@ -4,12 +4,11 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 > **2026-07-01 update:** Post-BFP-consultation, the simulation/analytics design changed
 > (see `Diagrams/01`–`06` and the approved plan at
-> `C:\Users\ASUS-Pc\.claude\plans\there-has-been-some-goofy-sloth.md`). This adds a new
-> **Phase 2.5** (9-feature migration, Turso ingestion, rule-based labeling) that several
-> later phases now depend on. Checkboxes below have also been corrected — Phases 6–8 were
-> further along than this file previously showed (SHAP, FastAPI, streaming, feedback text
-> already shipped), but all of that was built for the **old 6-feature** contract and needs
-> to be re-verified/extended once Phase 2.5 lands.
+> `C:\Users\ASUS-Pc\.claude\plans\there-has-been-some-goofy-sloth.md`). This added a new
+> **Phase 2.5** (9-feature migration, Turso ingestion, rule-based labeling) — **now complete,
+> all 7 steps done** (see below). Phases 6–8 were further along than this file originally
+> showed (SHAP, FastAPI, streaming, feedback text already shipped) and have now been
+> re-verified/extended for the 9-feature contract as part of Phase 2.5 steps 6–7.
 
 ---
 
@@ -109,17 +108,23 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 - [x] **Retrained the model** on fresh 9-feature synthetic data (250 sessions, new `config` defaults: `max_depth=8`, `class_weight="balanced"`) — 100% train/test accuracy (synthetic data is separable by design); `models/midrr_rf.pkl` is gitignored so this is a local verification artifact, not a commit.
 - [x] Verified end-to-end: `/predict` (direct function call, since installed `httpx`/`starlette` versions are incompatible with `TestClient` in this env — pre-existing dependency mismatch, not fixed, out of scope) returns a sensible HIGH prediction with SHAP-ranked `featureImportance` and the new `panic_proxy` HIGH template; `/session/{id}/events` returns partial-then-complete snapshots across two batches with correct buffer cleanup on `session_end`. `pytest tests/` — 38 pass / 1 known-broken assertion (old feature name, Step 7) / 1 known-broken import (Step 7), i.e. `test_streaming.py` now *runs* (was a full import failure before).
 
-### Step 7 — Tests + docs
-- [ ] Bump all 6-feature assertions to 9 across `tests/` (`test_feature_engineering.py`, `test_streaming.py`, `test_model_definition.py`, `test_data_ingestion.py`)
-- [ ] Add unit tests: 3 new compute fns (fire + quake), `labeling.py` thresholds, Turso adapter (mocked client), synth distribution, new `test_api.py` for the 9-field `/predict` schema
-- [ ] `test_label_contract.py` unchanged (casing still `HIGH/MODERATE/LOW`)
-- [ ] `docs/MiDRR_ML_Development_Plan.md`: 6 → 9 features; add rule-based labeler + Turso ingestion + BFP validation loop; mark Phases 6–8 partially done
+### Step 7 — Tests + docs ✅ (2026-07-01)
+- [x] Bumped all 6-feature assertions to 9 across `tests/` (`test_feature_engineering.py` full rewrite with fire+quake dispatch coverage for all 9 `compute_*` fns; `test_streaming.py`'s `decision_delay` assertion → `decision_latency` + range checks for the 3 new features; `test_model_definition.py` dataset shape 6→9 cols + new `class_weight` config-wiring tests; `test_data_ingestion.py` fixture bumped to 9 features)
+- [x] New unit tests: `tests/test_labeling.py` (26 tests — `rule_based_label` boundary values, `phase_outcome_label` branches, `resolve_label` NaN-safety regression tests, `attach_labels`, `rule_expert_agreement`); Turso adapter tests in `test_data_ingestion.py` (`TestTursoIngestion`, mocked `libsql_client` via `sys.modules` injection — no real dependency or network needed); `tests/test_synth.py` (12 tests — locked 88/112/50 class split, legacy `n_per_class=` mode, new event vocabulary, panic_proxy/spray_accuracy skill-separation regression guards); new `tests/test_api.py` (10 tests — 9-field `FeaturesRequest`, `/predict` full contract + 503/422 error paths, `/session/{id}/events` snapshot + 400 mismatch + `session_end` buffer cleanup)
+- [x] `test_label_contract.py` — unchanged, as planned (casing still `HIGH/MODERATE/LOW`)
+- [x] `docs/MiDRR_ML_Development_Plan.md`: added a 2026-07-01 changelog note; 6→9 feature references updated throughout (§0.1, the scope diagram, the readiness table, Ch3 Table-1 mismatch section); Turso replaces the originally-planned Postgres transport; §3 documents `labeling.py` as the rule-based labeler + BFP-validation-UI expert-override loop; Phases 6–8 marked `⚠️ partially done` with per-bullet status (SHAP, the API incl. the streaming route, and SHAP+threshold feedback are all shipped; CV/metrics.json, deployment, and the mod-facing feedback payload schema are not)
+- [x] **CI fix found during this step:** `tests/test_api.py` imports the `api` package (FastAPI/Pydantic), but `.github/workflows/ci.yml` only installed the root `requirements.txt` — `api/requirements.txt` (fastapi/uvicorn/pydantic/shap) was never installed in CI, which would have broken the pipeline the moment this test file landed. Added `pip install -r api/requirements.txt` to the workflow.
+- [x] Noted but not fixed (pre-existing, unrelated): installed `httpx`/`starlette` versions in this dev environment are mutually incompatible with FastAPI's `TestClient`; `test_api.py` calls route functions directly instead (still exercises the real request/response mapping).
 
-**Verification for this phase:** `pytest tests/ -v` all green; end-to-end synthetic smoke run (9 cols, no NaN, both scenarios, class split ≈ 35/45/20); Turso adapter parses a mocked/test `sessions` row into a valid 9-feature raw-log row; `/predict` returns the full contract with 9-feature SHAP importances; streaming route returns a 9-feature snapshot; rule-based labels reproduce the ≥75/40/<40 tiers with expert override precedence and expert-only test split.
+**Verification for this phase:** `pytest tests/ -v` → **131 passed**, 0 failed, 0 errors (up from 23 passed / 2 broken files at the start of Phase 2.5). Confirmed: 9-feature dispatch for both fire and earthquake on every `compute_*` function; synthetic smoke run (250 sessions, exact 88/112/50 split, zero NaN, both scenarios); Turso adapter parses a mocked `sessions` row into a valid 9-feature raw-log row; `/predict` returns the full contract with 9-feature SHAP importances; `/session/{id}/events` returns a 9-feature snapshot and closes correctly on `session_end`; rule-based labels reproduce the ≥75/40/<40 tiers with expert-override precedence and the expert-only test-split guard enforced in code.
 
 ---
 
-## Phase 3 — Real Data Collection *(blocked on Phase 2.5)*
+**Phase 2.5 — COMPLETE (2026-07-01).** All 7 steps done: 9-feature contract locked (schema, config, telemetry contract v1.2) → feature engineering with fire/earthquake dispatch → rule-based labeling + expert-override precedence → Turso/CSV ingestion adapter → synthetic data regenerated to spec → model retrained and every downstream consumer (inference, streaming, API, feedback) updated → full test suite green (131 tests) and dev-plan docs reconciled. Phases 3–9 below are now unblocked to build on the 9-feature contract.
+
+---
+
+## Phase 3 — Real Data Collection *(blocked on real mod telemetry — see `telemetry_contract.md` §7 gap analysis; Phase 2.5's 9-feature contract itself is done)*
 
 - [ ] Pilot run with small N — validate logs match contract v1.2 and 9 features compute correctly
 - [ ] Capture expert-rubric labels for each run (raters watching/replaying sessions)
@@ -150,8 +155,8 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 
 ## Phase 6 — Evaluation & Explainability
 
-- [x] Compute feature importance using SHAP (`src/midrr_classifier/explainability.py`, `TreeExplainer`) — **built for the 6-feature model; re-verify after Phase 2.5**
-- [x] Compute SHAP **per-session** (not only globally) — `predict_preparedness_full()` returns per-student SHAP values — **same 6→9 caveat**
+- [x] Compute feature importance using SHAP (`src/midrr_classifier/explainability.py`, `TreeExplainer`) — feature-count-agnostic, verified against the retrained 9-feature model (Phase 2.5 step 6)
+- [x] Compute SHAP **per-session** (not only globally) — `predict_preparedness_full()` returns per-student SHAP values over all 9 features
 - [ ] Report accuracy, per-class precision/recall/F1 (macro + weighted), confusion matrix
 - [ ] Permutation importance as a cross-check against SHAP
 - [ ] Persist all metrics to `models/metrics.json` for deterministic figure regeneration
@@ -161,9 +166,9 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 
 ## Phase 7 — Serving / API
 
-- [x] Build `api/` FastAPI service with `POST /predict` (six-feature body) — **needs the 3 new fields once Phase 2.5 lands**
+- [x] Build `api/` FastAPI service with `POST /predict` (9-feature body)
 - [x] Return `{ prepLevel, prepScore, featureImportance[], resultText }` contract (`api/schemas.py`, `api/routes/predict.py`)
-- [ ] Expose the streaming/mid-session route (`StreamingPredictor` exists in `streaming.py` but isn't mounted in `api/main.py` — tracked in Phase 2.5 Step 6)
+- [x] Expose the streaming/mid-session route — `api/routes/session.py` (`POST /session/{id}/events`, `DELETE /session/{id}`), mounted in `api/main.py` (Phase 2.5 step 6)
 - [ ] Add `POST /leads` and pre/post survey endpoints only if team decides surveys flow through this API
 - [ ] Containerize the API
 - [ ] Deploy (Render free tier + UptimeRobot keep-alive, or Railway)
@@ -173,8 +178,8 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 
 ## Phase 8 — Adaptive Feedback (ECD / Stealth-Assessment Layer)
 
-- [x] Map predicted level + top SHAP feature contributions → human-readable `resultText` (`api/feedback.py`) — **templates keyed on 6 features; extend for the 3 new ones + diagram thresholds in Phase 2.5 Step 6**
-- [ ] Encode the diagram's numeric feedback thresholds (latency >30s, spray accuracy <0.40, path efficiency <0.50, panic proxy >2.0)
+- [x] Map predicted level + top SHAP feature contributions → human-readable `resultText` (`api/feedback.py`), templates covering all 9 features
+- [x] Encode the diagram's numeric feedback thresholds (latency >30s, spray accuracy <0.40, path efficiency <0.50, panic proxy >2.0) — `check_thresholds()`, layered onto the SHAP-driven message (Phase 2.5 step 6)
 - [ ] Define and document the feedback payload schema the mod consumes (cross-repo with Necookie)
 
 ---

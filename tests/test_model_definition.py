@@ -32,9 +32,9 @@ def classifier(config: MiDRRConfig) -> MiDRRClassifier:
 
 @pytest.fixture()
 def tiny_dataset() -> tuple[np.ndarray, np.ndarray]:
-    """Minimal labelled dataset with 3 classes for fit/predict checks."""
+    """Minimal labelled dataset (9 columns — the v1.2 feature count) for fit/predict checks."""
     rng = np.random.default_rng(42)
-    X = rng.random((30, 6))
+    X = rng.random((30, 9))
     y = np.array(["HIGH"] * 10 + ["MODERATE"] * 10 + ["LOW"] * 10)
     return X, y
 
@@ -54,6 +54,21 @@ def test_model_n_estimators(config: MiDRRConfig, classifier: MiDRRClassifier) ->
 
 def test_model_max_depth(config: MiDRRConfig, classifier: MiDRRClassifier) -> None:
     assert classifier.model.max_depth == config.max_depth
+
+
+def test_model_class_weight_honors_config() -> None:
+    # Phase 2.5 step 6: class_weight must come from config, not a hardcoded literal.
+    cfg = MiDRRConfig(n_estimators=10, max_depth=3, random_state=7, class_weight=None)
+    clf = MiDRRClassifier(cfg)
+    clf.build_model()
+    assert clf.model.class_weight is None
+
+
+def test_model_class_weight_defaults_to_balanced() -> None:
+    cfg = MiDRRConfig(n_estimators=10, max_depth=3, random_state=7)
+    clf = MiDRRClassifier(cfg)
+    clf.build_model()
+    assert clf.model.class_weight == "balanced"
 
 
 def test_model_random_state(config: MiDRRConfig, classifier: MiDRRClassifier) -> None:
@@ -114,7 +129,7 @@ def test_predict_proba_sums_to_one(
 def test_predict_without_build_raises(config: MiDRRConfig) -> None:
     clf = MiDRRClassifier(config)  # build_model NOT called
     with pytest.raises(RuntimeError, match="build_model"):
-        clf.predict(np.zeros((1, 6)))
+        clf.predict(np.zeros((1, 9)))
 
 
 def test_fit_without_build_raises(

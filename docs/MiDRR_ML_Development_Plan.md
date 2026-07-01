@@ -10,6 +10,8 @@
 
 > **Updated** after the system architecture diagram and the BFP-validated LSPU Sta. Cruz evacuation plan were added. Key deltas: labeling rubric now exists and is grounded in the BFP plan; telemetry contract bumped to v1.1 (three new events + map metadata); PostgreSQL confirmed as the data-layer store; feature importance confirmed to feed the stealth-assessment layer.
 
+> **Updated again (2026-07-01)** after a second BFP consultation revised the simulation/analytics design (Phase 2.5, see `tasks.md`). Key deltas: **6 → 9 engineered features** (new `spray_accuracy`, `resource_utilization`, `situational_awareness`; `decision_delay` renamed/re-anchored to `decision_latency`; `panic_proxy` redefined from bearing-change std-dev to movement-speed² std-dev — every feature now has an earthquake-parity computation, not just fire); telemetry contract bumped to **v1.2** (3-phase fire state machine, PASS-technique events, Drop-Cover-Hold); the transport layer is **Turso Cloud DB (libSQL)**, not PostgreSQL as originally planned here — `data_ingestion.load_sessions()` supports both Turso and CSV; the game's own **3-phase state machine now computes a rule-based `prep_level`** (`src/midrr_classifier/labeling.py`), used as a `label_source="rule"` weak label alongside `label_source="expert"` BFP-instructor overrides from a validation UI (test split remains expert-only — circularity guard unchanged). Phases 6–8 below were also already **partially shipped** before this revision (SHAP explainability, the FastAPI service, SHAP-informed feedback text) — see the phase-by-phase status notes.
+
 ---
 
 ## 0. Read this first — the two things that decide your whole timeline
@@ -17,19 +19,19 @@
 Before any modeling, two facts from the actual repos govern everything:
 
 ### 0.1 The telemetry gap (your critical path, and it's not in your repo)
-Your `data_schema.RAW_LOG_SCHEMA` and Chapters 1 & 3 assume **per-event/per-tick logs** — `x/y/z`, `timestamp`, `hazard_distance` over time, and interaction events (`door_open`, `extinguisher_use`, `emergency_exit`). All six of your engineered features are computed from that granularity.
+Your `data_schema.RAW_LOG_SCHEMA` and Chapters 1 & 3 assume **per-event/per-tick logs** — `x/y/z`, `timestamp`, `hazard_distance` over time, and interaction events (`door_open`, `extinguisher_use`, `emergency_exit`). All nine of your engineered features (v1.2 — see the 2026-07-01 update note above) are computed from that granularity.
 
 But per `BERONG_SMP_WEB/CLAUDE.md`, the mod **currently emits session-level data only**:
 
-| The mod produces today | Your six features need |
+| The mod produces today | Your nine features need |
 |---|---|
 | `disasterType` (FIRE/EARTHQUAKE) | per-tick `x,y,z` trajectory → `path_efficiency_ratio`, `panic_proxy` |
-| session duration / ticks elapsed | `timestamp` per event → `evacuation_time`, `decision_delay` |
-| `firesExtinguishedCount` (fire) | timestamped interaction events → `interaction_frequency`, `decision_delay` |
-| `magnitude`, `aftershockCount`, `EarthquakePhase` (quake) | `hazard_distance` per tick → `hazard_avoidance_ratio` |
+| session duration / ticks elapsed | `timestamp` per event → `evacuation_time`, `decision_latency` |
+| `firesExtinguishedCount` (fire) | timestamped interaction/PASS events → `interaction_frequency`, `decision_latency`, `spray_accuracy`, `resource_utilization` |
+| `magnitude`, `aftershockCount`, `EarthquakePhase` (quake) | `hazard_distance` per tick, `drop_cover_hold` events → `hazard_avoidance_ratio`, the quake analogs of `spray_accuracy`/`resource_utilization` |
 | player UUID, start/end | — |
 
-**Implication:** none of your six features can be computed from real data until the mod ships new per-tick instrumentation. This is a **cross-repo dependency on Necookie**, and it is the single longest pole. Your `data_schema.py` already *is* the contract — your first high-leverage move is to formalize it as a logging spec and hand it over.
+**Implication:** none of your nine features can be computed from real data until the mod ships new per-tick instrumentation. This is a **cross-repo dependency on Necookie**, and it is the single longest pole. Your `data_schema.py` already *is* the contract — your first high-leverage move is to formalize it as a logging spec and hand it over.
 
 > **Now formalized** as `docs/telemetry_contract.md` (v1.1). The BFP evacuation plan added three required events the mod must build beyond the six-feature stream: `fire_alarm_activate` (COMMUNICATE step), `assembly_area_reached` (the *true* evacuation-success signal — not `emergency_exit`), and `nearby_player_count` on `extinguisher_use` (the "do not fight fire alone" rule). It also adds a one-time static `map_metadata.json` (designated exits, assembly areas, alarm/extinguisher positions) so `path_efficiency_ratio` measures against the real floor plan.
 
@@ -50,7 +52,7 @@ flowchart LR
         A[Minecraft fire/earthquake sim] --> B[Per-tick + session telemetry]
     end
     subgraph YOURS["MiDRR-Classifier — YOU"]
-        C[Ingestion + schema validation] --> D[Feature engineering<br/>6 features]
+        C[Ingestion + schema validation] --> D[Feature engineering<br/>9 features]
         D --> E[Random Forest train/tune/validate]
         E --> F[Evaluation + explainability]
         E --> G[predict_preparedness inference]
@@ -76,16 +78,18 @@ Good news: the scaffold is solid and well-aligned to Chapter 3. Honest status:
 
 | Module | State | What's left |
 |---|---|---|
-| `config.py` | ✅ real | tune `n_estimators`, `max_depth` after CV; add `feedback`/serving knobs |
-| `data_schema.py` | ✅ real | promote to a versioned **logging contract**; calibrate `SAFE_HAZARD_DISTANCE`; lock `LABEL_CLASSES` casing (note: schema uses `High/Moderate/Low`, dashboard uses `HIGH/MODERATE/LOW` — **reconcile this now**) |
-| `data_ingestion.py` | ✅ real | add stratified split, group-aware split by `player_id` |
-| `feature_engineering.py` | ⚠️ **placeholder formulas** | replace all `compute_*` with Chapter-3-exact operational definitions |
-| `model_definition.py` | ✅ real wrapper | add `predict_proba`, class-weight, CV helper |
-| `train.py` / `evaluate.py` | ✅ runnable | wire CV, persist metrics JSON, save importances |
-| `inference.py` | ✅ boundary defined | add proba + per-feature importance to the return; this feeds the dashboard's `prepScore` + `featureImportance` |
-| `tests/` | ✅ synthetic-data tests pass | add tests for label casing, group split, API contract |
-| **REST API** | ❌ not built | `midrr-api` FastAPI service (the web repo already expects `PUBLIC_API_BASE_URL`) |
-| **Dataset** | ❌ none | blocked on §0.1 |
+| `config.py` | ✅ real | `n_estimators`/`max_depth`/`class_weight` locked to the diagram spec (100/8/balanced); add Turso connection fields — **done** |
+| `data_schema.py` | ✅ real | 9-feature contract locked (v1.2); `LABEL_CLASSES` casing reconciled (`HIGH/MODERATE/LOW`, tested); `SAFE_HAZARD_DISTANCE` calibration still pending real data (Phase 4) |
+| `data_ingestion.py` | ✅ real | group-aware stratified split done; Turso + CSV adapter (`load_sessions()`) done; expert-only test-split circularity guard enforced in code |
+| `feature_engineering.py` | ✅ real | 9 `compute_*` functions with fire/earthquake dispatch, verified against synthetic ground truth; still placeholder-quality pending real-data calibration (Phase 4) |
+| `labeling.py` | ✅ new (Phase 2.5) | rule-based label + phase-outcome cross-check + expert/rule precedence + κ helper |
+| `model_definition.py` | ✅ real wrapper | `predict_proba`, config-driven `class_weight`, retrained on the 9-feature synthetic set |
+| `train.py` / `evaluate.py` | ✅ runnable | still needs CV + persisted `metrics.json` (Phase 5/6) |
+| `inference.py` | ✅ done | proba + per-student SHAP + global importances all returned |
+| `explainability.py` | ✅ done (was Phase 6) | SHAP `TreeExplainer`, cached per model, feature-count-agnostic |
+| `tests/` | ✅ | label casing, group split + expert-only enforcement, API contract, labeling thresholds, synth distribution all covered |
+| **REST API** | ✅ built (was Phase 7) | `POST /predict` + `POST /session/{id}/events` (streaming) + `/health`; not yet containerized/deployed |
+| **Dataset** | ❌ none | blocked on §0.1 — still true even under the revised 9-feature/Turso design |
 
 **Quick win this week:** the casing mismatch (`High` vs `HIGH`) will silently break the dashboard integration. Pick one canonical form, fix `LABEL_CLASSES`, and add a test that asserts it. Small, but it's a real latent bug across repos.
 
@@ -103,7 +107,9 @@ You need ordinal labels (`High`/`Moderate`/`Low`) per run. Three viable routes; 
 
 **Recommended:** Expert-rubric on the **full set if feasible, or a gold subset**, plus rule-based weak labels to scale, with the rule-based labels **validated against the expert gold set** (report agreement). Report κ in Chapter 3/4. This directly hardens the methodology against the "where's the basis" critique.
 
-**Status — DONE:** this strategy is now fully specified in `docs/labeling_rubric.md`, grounded in the BFP-validated LSPU evacuation plan. It defines the six scoring dimensions per scenario, the composite→level tiers, the critical-failure override, the κ protocol, the `label_source` (`expert`/`rule`) separation, and the circularity guard. **Remaining action:** get BFP/DRRMO to validate the *earthquake* dimensions (the uploaded plan is fire-focused) and run the rater-calibration pilot.
+**Status — DONE:** this strategy is now fully specified in `docs/labeling_rubric.md`, grounded in the BFP-validated LSPU evacuation plan. It defines the six scoring dimensions per scenario, the composite→level tiers, the critical-failure override, the κ protocol, the `label_source` (`expert`/`rule`) separation, and the circularity guard.
+
+**Status — DONE (2026-07-01 revision):** the rule-based side of the hybrid is now real code, not just a plan. The revised simulation design runs its own 3-phase fire (and earthquake) state machine, which computes a numeric `simulation_score` and maps it to a rule-based `prep_level` — mirrored on the ML side by `src/midrr_classifier/labeling.py` (`rule_based_label()`, `phase_outcome_label()` as an independent cross-check, `rule_expert_agreement()` for the κ-style validation this section calls for). The BFP-instructor validation UI is the **expert override loop**: `resolve_label()`/`attach_labels()` implement expert-override-wins-over-rule-label precedence, and `data_ingestion.split_train_test()` enforces the expert-only test split in code (not just as a documented convention). **Remaining action (unchanged):** get BFP/DRRMO to validate the *earthquake* dimensions (the uploaded plan is fire-focused) and run the rater-calibration pilot — that's a real-world data-collection step this revision doesn't change.
 
 ---
 
@@ -111,15 +117,17 @@ You need ordinal labels (`High`/`Moderate`/`Low`) per run. Three viable routes; 
 
 The ordering is deliberate: everything you *can* do without real data is front-loaded, so you're not idle while the mod telemetry and data collection happen in parallel.
 
+> **Note:** the checkboxes below are the original phase plan and are frozen at roughly when this document was last substantially rewritten. **`tasks.md` is the live, currently-accurate phase tracker** — by the 2026-07-01 revision, Phases 0–2 are fully done and Phases 6–8 are partially done (see the phase notes below and `tasks.md`'s Phase 2.5 section for the 9-feature migration specifically).
+
 ### Phase 0 — Foundations & decisions *(do now, ~1 wk)*
 - [ ] Reconcile label casing across `data_schema.py` ↔ dashboard `PrepLevel`. Add a test.
-- [ ] Lock the **operational definitions** of all six features to exact Chapter 3 wording (units, edge cases, time caps). Write them into `data_schema.py` docstrings as the source of truth.
+- [ ] Lock the **operational definitions** of all nine features (v1.2) to exact Chapter 3 wording (units, edge cases, time caps). Write them into `data_schema.py` docstrings as the source of truth.
 - [ ] Decide labeling strategy (§3) and draft the rubric + κ protocol.
 - [ ] Freeze the **telemetry contract v1** (next phase) from your `RAW_LOG_SCHEMA`.
 
 ### Phase 1 — Synthetic data + pipeline hardening *(parallel, ~1–2 wks, no real data needed)*
-- [ ] Write a **synthetic log generator** that emits the exact `telemetry_contract.md` v1.1 format (including `fire_alarm_activate`, `assembly_area_reached`, `nearby_player_count`) for fire and earthquake, with controllable "skill" so it produces separable High/Moderate/Low. Put it in `src/midrr_classifier/synth.py` and a notebook.
-- [ ] Replace placeholder `compute_*` formulas with the locked Chapter-3 definitions; verify against synthetic ground truth. **Two semantics fixes from the BFP plan:** (a) `evacuation_time`/`decision_delay` end at `assembly_area_reached`, **not** `emergency_exit` (an exit is a waypoint); (b) `interaction_frequency` is **not** monotonically good — extinguisher use while `nearby_player_count == 0` is a *violation*, so don't treat all interactions as positive signal.
+- [ ] Write a **synthetic log generator** that emits the `telemetry_contract.md` v1.2 format (including `fire_alarm_activate`, `assembly_area_reached`, `nearby_player_count`, the PASS-technique events, and `drop_cover_hold`) for fire and earthquake, with controllable "skill" so it produces separable High/Moderate/Low. Put it in `src/midrr_classifier/synth.py` and a notebook.
+- [ ] Replace placeholder `compute_*` formulas with the locked Chapter-3 definitions; verify against synthetic ground truth. **Two semantics fixes from the BFP plan:** (a) `evacuation_time`/`decision_latency` end at `assembly_area_reached`, **not** `emergency_exit` (an exit is a waypoint); (b) `interaction_frequency` is **not** monotonically good — extinguisher use while `nearby_player_count == 0` is a *violation*, so don't treat all interactions as positive signal.
 - [ ] End-to-end smoke run: raw → features → train → evaluate → confusion matrix PNG, **entirely on synthetic data**.
 - [ ] Group-aware, stratified train/test split (never let one `player_id` leak across splits).
 - [ ] CI: GitHub Actions running `pytest` on push.
@@ -129,7 +137,7 @@ The ordering is deliberate: everything you *can* do without real data is front-l
 - [x] Turn `RAW_LOG_SCHEMA` into a versioned **`docs/telemetry_contract.md`** — **DONE (v1.1)**: JSON + batch-CSV shapes, per-tick vs per-event, 10 Hz sampling, coordinate frame, units, full `event_type` vocabulary.
 - [x] Specify required new mod instrumentation — **DONE** (§7 gap analysis): per-tick `x,y,z`; running `hazard_distance`; `fire_alarm_activate`; `assembly_area_reached`; `nearby_player_count`; one-time `map_metadata.json`.
 - [ ] **Hand to Necookie with a deadline (your single highest-leverage action — do today).** Track it as a cross-repo dependency.
-- [ ] Agree on transport: the architecture diagram shows the data layer as **Real-Time Logging → PostgreSQL → Feature Engineering**, so the mod can write to Postgres and your `data_ingestion.py` reads from it directly (add a Postgres loader alongside the CSV loader). Batched CSV export remains the lower-risk fallback for a thesis.
+- [x] Agree on transport — **DONE, superseded by the 2026-07-01 revision:** the original architecture diagram proposed PostgreSQL; the team settled on **Turso Cloud DB (libSQL)** instead, with a `sessions` table (`event_log` JSON + `move_log_csv`). `data_ingestion.load_sessions(source="turso"|"csv")` supports both, so batched CSV export remains the offline/reproducibility fallback.
 
 ### Phase 3 — Real data collection *(blocked on Phase 2; ~2–4 wks of runs)*
 - [ ] Pilot: small N first to validate that logs match the contract and features compute sanely.
@@ -151,24 +159,22 @@ The ordering is deliberate: everything you *can* do without real data is front-l
 - [ ] Address class imbalance (`class_weight="balanced"` and/or resampling) — preparedness classes will not be even.
 - [ ] Lock final config into `config.py`; retrain on full train split; persist `models/midrr_rf.pkl`.
 
-### Phase 6 — Evaluation & explainability *(~1 wk)*
-- [ ] Report accuracy, **per-class** precision/recall/F1 (macro + weighted), confusion matrix — all six are explicit Chapter 1/3 objectives.
-- [ ] **Feature importance: use permutation importance and/or SHAP**, not just sklearn's default Gini `feature_importances_`. Two reasons: (a) Gini importance is biased for correlated features (your features *are* correlated), (b) the dashboard's mock already expects *"Shapley-value-like weight 0.0–1.0"* in `featureImportance` — so SHAP is the natural fit and gives you the dashboard integration for free.
-- [ ] **Compute SHAP per-session, not only globally.** The architecture diagram routes Feature Importance into the Stealth-Assessment layer, which turns it into adaptive feedback — so each run needs its *own* top-contributing features, not just a dataset-wide ranking.
+### Phase 6 — Evaluation & explainability *(~1 wk)* — ⚠️ partially done
+- [x] **Feature importance: SHAP**, computed **per-session** via `explainability.py`'s `TreeExplainer` (cached per model, feature-count-agnostic — the 9-feature migration needed no changes here). `inference.predict_preparedness_full()` returns both per-student SHAP and global Gini importance (kept for training-time diagnostics only).
+- [ ] Report accuracy, **per-class** precision/recall/F1 (macro + weighted), confusion matrix — all nine are explicit Chapter 1/3 objectives. Still pending real/synthetic-scale evaluation run.
 - [ ] Persist all metrics to a `models/metrics.json` so figures regenerate deterministically for the manuscript.
-- [ ] Sanity check importances against domain intuition (e.g. `decision_delay`, `hazard_avoidance_ratio` should rank high) — this *is* your "what behaviors drive preparedness" research finding.
+- [ ] Sanity check importances against domain intuition (e.g. `decision_latency`, `hazard_avoidance_ratio` should rank high) — this *is* your "what behaviors drive preparedness" research finding.
 
-### Phase 7 — Serving / API *(~1 wk; the web repo already expects it)*
-- [ ] Build `midrr-api` (FastAPI): `POST /predict` taking the six features (or raw session logs → features → predict).
-- [ ] Return `{ prepLevel, prepScore (proba→0–100), featureImportance[], resultText }` — matches the dashboard `Session` contract exactly.
+### Phase 7 — Serving / API *(~1 wk; the web repo already expects it)* — ⚠️ partially done
+- [x] Built `api/` (FastAPI): `POST /predict` taking the nine features, **and** `POST /session/{id}/events` for mid-session streaming predictions (the architecture diagram's real-time path — this wasn't in the original phase plan but was already implemented in `streaming.py` and is now mounted).
+- [x] Returns `{ prepLevel, prepScore (proba→0–100), featureImportance[], resultText }` — matches the dashboard `Session` contract exactly.
 - [ ] Add `POST /leads` and pre/post survey endpoints **only if** your team decides surveys flow through this API (web repo references them as design intent).
 - [ ] Containerize; deploy somewhere free/cheap (Render free tier with an UptimeRobot keep-alive is fine for a thesis demo — same pattern you've used before; Railway or a small VPS if you want no cold starts).
 - [ ] Set `PUBLIC_API_BASE_URL` in the web repo to your deployed URL.
 
-### Phase 8 — Adaptive feedback (ECD / stealth-assessment layer) *(~1 wk)*
-- [ ] Map predicted level + top feature contributions → human-readable `resultText` and improvement recommendations (this is the "adaptive feedback" objective and the ECD competency-evidence link).
-- [ ] Keep it rule-driven and explainable (e.g. "high `decision_delay` + low `hazard_avoidance_ratio` → recommend X"). Defensible and doesn't need another model.
-- [ ] Define the feedback payload the mod consumes (cross-repo with Necookie).
+### Phase 8 — Adaptive feedback (ECD / stealth-assessment layer) *(~1 wk)* — ⚠️ partially done
+- [x] `api/feedback.py` maps predicted level + top SHAP feature contributions → human-readable `resultText`, with a "bright spot" callout when a feature helped despite the overall result. Extended (2026-07-01) with `check_thresholds()` — the diagram's fixed numeric cutoffs (`decision_latency` >30s, `spray_accuracy` <0.40, `path_efficiency_ratio` <0.50, `panic_proxy` >2.0) layered on top of the SHAP-driven message, kept rule-driven and explainable per the original intent below.
+- [ ] Define the feedback payload the mod consumes (cross-repo with Necookie) — still undocumented as a formal contract.
 
 ### Phase 9 — Manuscript & defense support *(ongoing → final)*
 - [ ] Generate publication-quality figures: confusion matrix, feature-importance bar, per-class metrics table, CV variance.
@@ -187,11 +193,11 @@ The ordering is deliberate: everything you *can* do without real data is front-l
 | Ch1 obj: ECD stealth assessment + adaptive feedback | Phase 8 |
 | Ch1 obj: accuracy/precision/recall/F1/confusion/importance | Phase 6 + `metrics.json` |
 | Ch2 adviser comment ("basis…") on Algorithm Matrix | §3 labeling basis + §4 Phase 9 defense notes; cite Fife & D'Onofrio, Wu & Jiang, Chen |
-| Ch3 Granular Logging Framework (Table 1) | §0.1 / §2 — reconcile your 6 features with Table 1's 8 attributes (Table 1 adds `Decision Sequence`, `Task Completion Time`, `Safety Compliance` — decide if these become features or stay raw) |
+| Ch3 Granular Logging Framework (Table 1) | §0.1 / §2 — reconciled: the original 6 features map to Table 1's 8 attributes via `CH3_ATTRIBUTE_MAPPING` in `data_schema.py` (`Decision Sequence`, `Task Completion Time`, `Safety Compliance` are raw-attribute groundings, not separate features). The 2026-07-01 revision adds 3 more features (`spray_accuracy`, `resource_utilization`, `situational_awareness`) that are **new BFP-driven instrumentation, not part of Ch3 Table 1** — call this out explicitly in Chapter 3/4 rather than forcing a Table-1 mapping that doesn't exist for them |
 | Ch3 70/30 split + K-fold | Phase 5 (use grouped, stratified CV) |
 | Ch3 System Architecture (Data/ML/Assessment layers) | Phases 1–8; architecture diagram **confirms PostgreSQL** as the data-layer store (Real-Time Logging → Postgres → Feature Engineering) and routes **Feature Importance → Stealth Assessment**. Add a Postgres loader to `data_ingestion.py`; compute SHAP per-session for the feedback layer |
 
-> ⚠️ **Consistency fix for Ch3:** Table 1 lists **8** logged attributes but your model uses **6** engineered features. State explicitly which raw attributes map to which features, and whether `Decision Sequence`, `Task Completion Time`, and `Safety Compliance` are (a) additional features, (b) raw inputs to existing features, or (c) out of scope. Examiners will catch a 6-vs-8 mismatch.
+> ⚠️ **Consistency fix for Ch3 — DONE, then extended:** Table 1 lists **8** logged attributes; the original model used **6** engineered features, resolved via `CH3_ATTRIBUTE_MAPPING` (`Decision Sequence`, `Task Completion Time`, `Safety Compliance` are raw-attribute groundings, not extra features). The model now uses **9** features — the 3 new ones (`spray_accuracy`, `resource_utilization`, `situational_awareness`) are BFP-driven additions with no Table-1 attribute to map to. State this explicitly in Chapter 3/4: don't force-fit them into Table 1, name them as a post-BFP-consultation design addition.
 
 ---
 
@@ -225,6 +231,8 @@ A *minimum viable* version (so you're never stuck with nothing): items 1–3 on 
 ---
 
 ## 8. Immediate next actions (this week)
+
+> **This entire numbered list is now historical — all 6 items were completed** (see `tasks.md` Phases 0–2). Left as-is below for the record rather than rewritten; the six-feature wording in item 3 reflects the *original* v1.1 design before the 2026-07-01 revision to nine features.
 
 Done since first draft: ~~write the telemetry contract~~ (✅ v1.1) · ~~draft the labeling rubric + κ protocol~~ (✅ `labeling_rubric.md`). Remaining:
 

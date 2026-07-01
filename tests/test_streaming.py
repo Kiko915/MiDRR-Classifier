@@ -113,11 +113,14 @@ class TestStreamingPredictorNoModel:
         snap = self.predictor.update("s1", "p1", "fire", self._basic_events())
         f = snap.features
         assert f["evacuation_time"] >= 0
-        assert f["decision_delay"] >= 0
+        assert f["decision_latency"] >= 0
         assert 0 < f["path_efficiency_ratio"] <= 1.0
         assert 0 <= f["hazard_avoidance_ratio"] <= 1.0
         assert f["interaction_frequency"] >= 0
         assert f["panic_proxy"] >= 0
+        assert 0 <= f["spray_accuracy"] <= 1.0
+        assert 0 <= f["resource_utilization"] <= 1.0
+        assert 0 <= f["situational_awareness"] <= 1.0
 
     def test_elapsed_time_matches_max_timestamp(self):
         snap = self.predictor.update("s1", "p1", "fire", self._basic_events())
