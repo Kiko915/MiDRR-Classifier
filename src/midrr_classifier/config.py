@@ -33,12 +33,18 @@ class MiDRRConfig:
         models_dir: Directory where trained model artifacts are saved.
         n_estimators: Number of trees in the Random Forest.
         max_depth: Maximum tree depth (None = unlimited).
+        class_weight: Passed straight to ``RandomForestClassifier`` to handle
+            class imbalance (e.g. ``"balanced"`` or ``None``).
         random_state: Seed for reproducibility.
         label_col: Name of the target column in the feature table.
         feature_cols: Ordered list of feature column names fed to the
             model.  Must match the output of
             :func:`~midrr_classifier.feature_engineering.build_feature_table`.
         test_size: Fraction of data reserved for the test split.
+        turso_database_url: libSQL connection URL for the Turso `sessions`
+            table (Phase 2.5 ingestion adapter). ``None`` = CSV-only mode.
+        turso_auth_token: Turso auth token. Defaults to the
+            ``TURSO_AUTH_TOKEN`` env var so the token is never hardcoded.
     """
 
     # Paths
@@ -47,26 +53,39 @@ class MiDRRConfig:
     models_dir: str = "models"
 
     # Random Forest hyperparameters
-    # TODO: tune these after cross-validation on the real dataset
+    # Locked to the BFP-revised simulation design spec (2026-07-01 diagrams).
     n_estimators: int = 100
-    max_depth: Optional[int] = None
+    max_depth: Optional[int] = 8
+    class_weight: Optional[str] = "balanced"
     random_state: int = 42
 
     # Column configuration
     label_col: str = "preparedness_level"
     feature_cols: list[str] = field(
         default_factory=lambda: [
-            "evacuation_time",
-            "decision_delay",
+            "decision_latency",
+            "spray_accuracy",
             "path_efficiency_ratio",
             "hazard_avoidance_ratio",
+            "evacuation_time",
             "interaction_frequency",
+            "resource_utilization",
             "panic_proxy",
+            "situational_awareness",
         ]
     )
 
     # Train / test split
     test_size: float = 0.3
+
+    # Turso Cloud DB (libSQL) — live ingestion source (Phase 2.5).
+    # Leave both None to use CSV-only ingestion (data_ingestion.load_raw_logs).
+    turso_database_url: Optional[str] = field(
+        default_factory=lambda: os.environ.get("TURSO_DATABASE_URL")
+    )
+    turso_auth_token: Optional[str] = field(
+        default_factory=lambda: os.environ.get("TURSO_AUTH_TOKEN")
+    )
 
     @property
     def model_path(self) -> str:

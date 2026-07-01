@@ -2,6 +2,15 @@
 
 Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependency — everything before Phase 3 can be done without real data.
 
+> **2026-07-01 update:** Post-BFP-consultation, the simulation/analytics design changed
+> (see `Diagrams/01`–`06` and the approved plan at
+> `C:\Users\ASUS-Pc\.claude\plans\there-has-been-some-goofy-sloth.md`). This adds a new
+> **Phase 2.5** (9-feature migration, Turso ingestion, rule-based labeling) that several
+> later phases now depend on. Checkboxes below have also been corrected — Phases 6–8 were
+> further along than this file previously showed (SHAP, FastAPI, streaming, feedback text
+> already shipped), but all of that was built for the **old 6-feature** contract and needs
+> to be re-verified/extended once Phase 2.5 lands.
+
 ---
 
 ## Phase 0 — Foundations & Decisions
@@ -37,9 +46,68 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 ---
 
-## Phase 3 — Real Data Collection *(blocked on Phase 2)*
+## Phase 2.5 — BFP-Revised Design Migration (9 Features, Turso, Rule-Based Labeling) *(NEW)*
 
-- [ ] Pilot run with small N — validate logs match contract and features compute correctly
+Source: BFP consultation diagrams (`01`–`06`) + approved plan. Locked decisions: adopt all
+9 features; full fire/earthquake parity; train on expert labels + rule-based weak labels
+(`label_source`), test set expert-only; ingestion adapter supports both Turso and CSV.
+This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-feature schema.
+
+### Step 1 — Contract ✅ (2026-07-01)
+- [x] `data_schema.py`: `FEATURE_SCHEMA` 6 → 9 keys (`decision_latency`, `spray_accuracy`, `path_efficiency_ratio`, `hazard_avoidance_ratio`, `evacuation_time`, `interaction_frequency`, `resource_utilization`, `panic_proxy`, `situational_awareness`)
+- [x] Rewrite `FEATURE_DEFINITIONS` locked prose for all 9 (fire computation + earthquake analog each)
+- [x] Add new event constants: `ext_spray` (+ `hit_fire` flag), `pin_pull`, `hazard_neutralize`, `phase_transition` (Prevention/Intervention/Evacuation), `drop_cover_hold`, `extinguisher_class` field
+- [x] Declare `nearby_player_count` in `RAW_LOG_SCHEMA` (currently used in code but undeclared); `session_end` documented as an `EVENT_TYPES` value (it's an event, not a raw-log column)
+- [x] Update `INTERACTION_EVENT_TYPES`, `DECISION_LATENCY_ACTION_TYPES` (renamed from `DECISION_DELAY_ACTION_TYPES`), `CH3_ATTRIBUTE_MAPPING` for the 9 features
+- [x] Add `label_source` (`expert`/`rule`) to the schema (+ `LABEL_SOURCES` constant)
+- [x] `config.py`: `feature_cols` → the 9 (fixed order); `max_depth` `None` → `8`; expose `class_weight` as a config field (still hardcoded in `model_definition.py:78` — wiring is Step 6); add Turso connection fields (`turso_database_url`/`turso_auth_token`, env-sourced)
+- [x] `docs/telemetry_contract.md` → **v1.2**: new events, `hit_fire`/`extinguisher_class` fields, `sessions`-table shape (`event_log` JSON + `move_log_csv` + `prep_level`/`confidence`/`simulation_score`/`passed`), Turso transport, 9 features + quake analogs, fix the 10/20 Hz inconsistency (locked to 20 Hz)
+
+  > This step intentionally broke `feature_engineering.py`/`streaming.py` imports (old names removed) — expected, fixed by Step 2.
+
+### Step 2 — Feature engineering ✅ (2026-07-01)
+- [x] Add `compute_spray_accuracy`, `compute_resource_utilization`, `compute_situational_awareness` (each dispatches on fire-vs-quake scenario family via `_is_earthquake_scenario`)
+- [x] Redefine `compute_panic_proxy` → std-dev of per-tick movement **speed²** (was bearing turn-angles)
+- [x] Re-anchor `compute_decision_delay` → `compute_decision_latency`, measured from **SIM_START** (`session_start` event) rather than first hazard exposure
+- [x] `build_feature_table()` emits the 9 columns + `preparedness_level` + `label_source`; keep group-by `(player_id, scenario_type)`
+- [x] Verified: `pytest tests/` — 23 tests still pass; `test_feature_engineering.py`/`test_streaming.py` fail on old 6-feature names as expected (fixed in Step 7 test bump; `streaming.py` itself still needs its Step 6 update)
+- [ ] TODO carried forward: `compute_resource_utilization` doesn't yet check `extinguisher_class` against room type (no `room_type` raw field from the mod yet) — sequencing-only for now
+
+### Step 3 — Labeling
+- [ ] New `src/midrr_classifier/labeling.py`: `rule_based_label(score)` (≥75 HIGH / 40–74 MODERATE / <40 LOW), `phase_outcome_label()` (Prevention=HIGH / Intervention=MOD / Evacuation=MOD|LOW / fail=LOW)
+- [ ] Helper to compute rule-vs-expert agreement (κ) for `labeling_rubric.md` validation
+- [ ] Wire into ingestion: attach `label_source="rule"` weak labels when no expert override present
+- [ ] `docs/labeling_rubric.md` → **v1.1**: document the game rule-based label + BFP override flow, `label_source`, reaffirm circularity guard, add earthquake DCH dimensions (§4B already drafted, needs BFP/DRRMO sign-off — see Ongoing)
+
+### Step 4 — Ingestion adapter
+- [ ] `data_ingestion.py`: new `load_sessions(source=...)` with two backends — Turso (libSQL client, env-configured `TURSO_DATABASE_URL`/auth token, parses `event_log` JSON + `move_log_csv`, maps `student_name→player_id`/`simulation_type→scenario_type`) and CSV (keep existing `load_raw_logs`/`load_feature_table`)
+- [ ] Label resolution: prefer expert override, else rule-based label via `labeling.py`
+- [ ] Keep group-aware `split_train_test()`; enforce expert-only test set
+
+### Step 5 — Synthetic data
+- [ ] `synth.py`: emit new events (ext_spray hit/miss, pin_pull, hazard_neutralize ×5, phase transitions, quake drop/cover/hold) and 9-feature signal
+- [ ] Class distribution → **HIGH 35% / MODERATE 45% / LOW 20%** across **250 sessions** (currently balanced); extend `_PROFILE` with spray-accuracy, pin-pull, situational-awareness, quake DCH-correctness params
+
+### Step 6 — Retrain + downstream (mechanical 6→9 propagation)
+- [ ] `model_definition.py`: retrain against 9-feature config (no structural change expected)
+- [ ] `inference.py` / `streaming.py`: recompute/serve 9 features; remove stale "Replace with SHAP in Phase 6" docstring in `inference.py`
+- [ ] `api/schemas.py` + `api/routes/predict.py`: request adds the 3 new features; SHAP `feature_cols` auto-follows config
+- [ ] `api/feedback.py`: encode diagram numeric thresholds (latency >30s, spray <0.40, path <0.50, panic >2.0) alongside existing SHAP templates
+- [ ] Expose the streaming route `POST /session/{id}/events` in `api/main.py` (currently only `/predict` + `/health` are mounted)
+
+### Step 7 — Tests + docs
+- [ ] Bump all 6-feature assertions to 9 across `tests/` (`test_feature_engineering.py`, `test_streaming.py`, `test_model_definition.py`, `test_data_ingestion.py`)
+- [ ] Add unit tests: 3 new compute fns (fire + quake), `labeling.py` thresholds, Turso adapter (mocked client), synth distribution, new `test_api.py` for the 9-field `/predict` schema
+- [ ] `test_label_contract.py` unchanged (casing still `HIGH/MODERATE/LOW`)
+- [ ] `docs/MiDRR_ML_Development_Plan.md`: 6 → 9 features; add rule-based labeler + Turso ingestion + BFP validation loop; mark Phases 6–8 partially done
+
+**Verification for this phase:** `pytest tests/ -v` all green; end-to-end synthetic smoke run (9 cols, no NaN, both scenarios, class split ≈ 35/45/20); Turso adapter parses a mocked/test `sessions` row into a valid 9-feature raw-log row; `/predict` returns the full contract with 9-feature SHAP importances; streaming route returns a 9-feature snapshot; rule-based labels reproduce the ≥75/40/<40 tiers with expert override precedence and expert-only test split.
+
+---
+
+## Phase 3 — Real Data Collection *(blocked on Phase 2.5)*
+
+- [ ] Pilot run with small N — validate logs match contract v1.2 and 9 features compute correctly
 - [ ] Capture expert-rubric labels for each run (raters watching/replaying sessions)
 - [ ] Inter-rater reliability pass — resolve disagreements, compute Cohen's/Fleiss' κ
 - [ ] Full data-collection runs (Santa Cruz / Calamba sites per Ch3)
@@ -49,7 +117,7 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 ## Phase 4 — Feature Engineering on Real Data
 
-- [ ] Run real logs through the pipeline; inspect per-feature distributions per class
+- [ ] Run real logs through the pipeline; inspect per-feature distributions per class (9 features)
 - [ ] Calibrate `SAFE_HAZARD_DISTANCE` (currently hardcoded `5.0`) with domain experts
 - [ ] Handle real-world edge cases: missing ticks, players who never evacuate, scenario time-limit caps
 - [ ] EDA: per-class feature separability, correlations (informs importance interpretation)
@@ -60,7 +128,7 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 - [ ] Train baseline RF with defaults; record metrics as the floor
 - [ ] Stratified k-fold CV (k=5) — report **mean ± std**, not a single split
-- [ ] Hyperparameter search over `n_estimators`, `max_depth`, `min_samples_leaf`, `max_features`, `class_weight`
+- [ ] Hyperparameter search over `n_estimators`, `max_depth`, `min_samples_leaf`, `max_features`, `class_weight` (diagram spec starting point: `n_estimators=100`, `max_depth=8`)
 - [ ] Address class imbalance (`class_weight="balanced"` and/or resampling)
 - [ ] Lock final hyperparameters into `config.py`; retrain on full train split; persist `models/midrr_rf.pkl`
 
@@ -68,18 +136,20 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 ## Phase 6 — Evaluation & Explainability
 
+- [x] Compute feature importance using SHAP (`src/midrr_classifier/explainability.py`, `TreeExplainer`) — **built for the 6-feature model; re-verify after Phase 2.5**
+- [x] Compute SHAP **per-session** (not only globally) — `predict_preparedness_full()` returns per-student SHAP values — **same 6→9 caveat**
 - [ ] Report accuracy, per-class precision/recall/F1 (macro + weighted), confusion matrix
-- [ ] Compute feature importance using **permutation importance and/or SHAP** (not Gini — it is biased for correlated features)
-- [ ] Compute SHAP **per-session** (not only globally) — feeds the stealth-assessment adaptive feedback layer
+- [ ] Permutation importance as a cross-check against SHAP
 - [ ] Persist all metrics to `models/metrics.json` for deterministic figure regeneration
-- [ ] Sanity check importances against domain intuition (`decision_delay`, `hazard_avoidance_ratio` should rank high)
+- [ ] Sanity check importances against domain intuition (`decision_latency`, `hazard_avoidance_ratio` should rank high)
 
 ---
 
 ## Phase 7 — Serving / API
 
-- [ ] Build `midrr-api` FastAPI service with `POST /predict` (accepts six features or raw session logs)
-- [ ] Return `{ prepLevel, prepScore (proba → 0–100), featureImportance[], resultText }` — exact dashboard `Session` contract
+- [x] Build `api/` FastAPI service with `POST /predict` (six-feature body) — **needs the 3 new fields once Phase 2.5 lands**
+- [x] Return `{ prepLevel, prepScore, featureImportance[], resultText }` contract (`api/schemas.py`, `api/routes/predict.py`)
+- [ ] Expose the streaming/mid-session route (`StreamingPredictor` exists in `streaming.py` but isn't mounted in `api/main.py` — tracked in Phase 2.5 Step 6)
 - [ ] Add `POST /leads` and pre/post survey endpoints only if team decides surveys flow through this API
 - [ ] Containerize the API
 - [ ] Deploy (Render free tier + UptimeRobot keep-alive, or Railway)
@@ -89,8 +159,8 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 
 ## Phase 8 — Adaptive Feedback (ECD / Stealth-Assessment Layer)
 
-- [ ] Map predicted level + top SHAP feature contributions → human-readable `resultText` and improvement recommendations
-- [ ] Keep it rule-driven and explainable (e.g. "high `decision_delay` + low `hazard_avoidance_ratio` → recommend drill on immediate evacuation")
+- [x] Map predicted level + top SHAP feature contributions → human-readable `resultText` (`api/feedback.py`) — **templates keyed on 6 features; extend for the 3 new ones + diagram thresholds in Phase 2.5 Step 6**
+- [ ] Encode the diagram's numeric feedback thresholds (latency >30s, spray accuracy <0.40, path efficiency <0.50, panic proxy >2.0)
 - [ ] Define and document the feedback payload schema the mod consumes (cross-repo with Necookie)
 
 ---
@@ -100,12 +170,13 @@ Derived from `docs/MiDRR_ML_Development_Plan.md`. Phases are ordered by dependen
 - [ ] Generate publication-quality figures: confusion matrix, feature-importance bar chart, per-class metrics table, CV variance plot
 - [ ] Write Chapter 4 results narrative (model performance + which behaviors drive preparedness)
 - [ ] Prepare reproducibility appendix: fixed seeds, `config.py` snapshot, `requirements.txt`, data version hash
-- [ ] Defense Q&A prep: why RF over alternatives, why these six features, how labels were obtained and their κ, small-N generalization limits
+- [ ] Defense Q&A prep: why RF over alternatives, why 9 features (and how they replaced the original 6), how labels were obtained (expert + rule-based hybrid) and their κ, small-N generalization limits
 
 ---
 
 ## Ongoing / Cross-Cutting
 
-- [ ] Get BFP/DRRMO to validate earthquake rubric dimensions (current `labeling_rubric.md` is fire-focused)
+- [ ] Get BFP/DRRMO to formally validate the earthquake rubric dimensions (`labeling_rubric.md` §4B is drafted but unvalidated)
 - [ ] Reconcile `LABEL_CLASSES` order in confusion matrix axis vs dashboard display order
+- [ ] Keep `docs/MiDRR_ML_Development_Plan.md`, `telemetry_contract.md`, and `labeling_rubric.md` versions in sync as Phase 2.5 lands
 - [ ] Update this file as tasks are completed
