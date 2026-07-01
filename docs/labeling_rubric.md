@@ -1,11 +1,17 @@
 # BERONG SMP — Preparedness Labeling Rubric & Protocol
 
-**Version:** 1.0 (draft)
+**Version:** 1.1 (draft)
 **Owner:** AI/ML Engineer (MiDRR-Classifier)
 **Raters:** BFP officers + teachers (per Ch3 and the system architecture's BFP validation loop)
 **Grounding source:** LSPU Sta. Cruz Administration Building Evacuation Plan (BFP-validated) + standard PHIVOLCS/DRRMO earthquake guidance.
 
-This document defines how each simulation run gets its `preparedness_level` label (**High / Moderate / Low**) — the `y` the Random Forest learns to predict. **Labels do not come from the game or from the survey scores; they come from expert judgment scored against BFP-validated procedures.**
+This document defines how each simulation run gets its `preparedness_level` label (**High / Moderate / Low**) — the `y` the Random Forest learns to predict. **The gold label still comes from expert judgment scored against BFP-validated procedures — not from the game's own arithmetic or from survey scores.** What changed in v1.1 is that the game *itself* now also computes a rule-based `prep_level` inside its 3-phase state machine (§7), and that rule-based label is now used as a **weak label for scale**, not as the gold standard.
+
+### Changes since v1.0 (driven by the 2026-07-01 BFP consultation / revised simulation design)
+- **The game now computes its own numeric score and rule-based label** (`simulation_score` → `prep_level` via thresholds ≥75 HIGH / 40–74 MODERATE / <40 LOW), written to the Turso `sessions` table alongside a `confidence` value. See `docs/telemetry_contract.md` §3b/§5.
+- **`label_source` column** (`expert` / `rule`) now travels with every labeled row, implemented by `src/midrr_classifier/labeling.py` (`rule_based_label()`, `phase_outcome_label()`, `resolve_label()`/`attach_labels()`). Precedence is **expert override > rule label > rule score** — see §7 below (unchanged principle, now with code behind it).
+- **`rule_expert_agreement()`** (in `labeling.py`) implements the §7 validation requirement in code: compute Cohen's κ between the game's rule labels and the expert gold subset before trusting rule labels at scale.
+- **The circularity guard is unchanged and still binding: the test split must be expert-only** (`label_source == "expert"`), enforced by the ingestion adapter (`data_ingestion.resolve_session_labels()`), not just a paper policy.
 
 ---
 
@@ -104,16 +110,18 @@ The override encodes the BFP non-negotiables — a fast, calm run that ends in a
 
 ## 7. Scaling: the hybrid (expert gold + rule-based weak labels)
 
-Hand-scoring every run may be infeasible at N≈300–400. Use the hybrid from the dev plan:
+Hand-scoring every run may be infeasible at N≈300–400. Use the hybrid from the dev plan — **now implemented, not just planned:**
 
-- **Expert gold set:** all runs if feasible, otherwise a stratified subset. **The test set is always expert-labeled.**
-- **Rule-based weak labels** to scale training data — transparent rules from outcomes:
-  - reached assembly area **and** low hazard exposure **and** alarm pressed **and** timely → *High*
-  - reached safety but slow/inefficient or missed alarm → *Moderate*
-  - failed to evacuate / fought fire alone / high hazard exposure → *Low*
-- **Validate rule labels against the expert gold subset** (report agreement / κ between rule and expert). Only trust weak labels if they agree well with experts.
+- **Expert gold set:** all runs if feasible, otherwise a stratified subset, entered through the **BFP-instructor validation UI** (override loop in the revised system architecture). **The test set is always expert-labeled** — `data_ingestion.resolve_session_labels()` / `split_train_test()` enforce this at the code level, not just by convention.
+- **Rule-based weak labels** scale training data. The game's own 3-phase fire (and earthquake) state machine computes a numeric `simulation_score` and maps it to `prep_level` via `src/midrr_classifier/labeling.py::rule_based_label()`:
+  - `score >= 75` → **High**
+  - `40 <= score < 75` → **Moderate**
+  - `score < 40` → **Low**
+  - `labeling.py::phase_outcome_label()` provides an independent, coarser cross-check derived from which state-machine phase (`prevention` / `intervention` / `evacuation`) a run reached — use it to sanity-check the numeric rule, not as a second label source.
+- **Label precedence** (`labeling.py::resolve_label()`): **expert override > game's precomputed `prep_level` > label derived from `simulation_score`**. Every resolved row carries a `label_source` of `"expert"` or `"rule"`.
+- **Validate rule labels against the expert gold subset** using `labeling.py::rule_expert_agreement()` — computes Cohen's κ and raw agreement rate between the two on the overlapping (both-labeled) subset. Only trust weak labels at scale if they agree well with experts (target κ ≥ 0.60, matching §6's inter-rater bar).
 
-> Keep rule-based labels **distinct in the data** (a `label_source` column: `expert` / `rule`). Never report final accuracy on rule-labeled test data.
+> Keep rule-based labels **distinct in the data** via the `label_source` column (`expert` / `rule`, see `data_schema.LABEL_SOURCES`). Never report final accuracy on rule-labeled test data.
 
 ---
 
@@ -148,4 +156,4 @@ Scoring the BFP procedures needs telemetry that v1.0 of the contract doesn't yet
 
 ---
 
-*Rubric v1.0 — grounded in the BFP-validated LSPU Sta. Cruz evacuation plan. Pair with `telemetry_contract.md` (needs v1.1 updates in §9) and the ML development plan §3.*
+*Rubric v1.1 — grounded in the BFP-validated LSPU Sta. Cruz evacuation plan. Pair with `telemetry_contract.md` (v1.2) and the ML development plan §3.*

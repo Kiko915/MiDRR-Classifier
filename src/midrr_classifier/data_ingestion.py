@@ -12,6 +12,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split as _sklearn_split
 
 from midrr_classifier.data_schema import validate_feature_schema, validate_raw_schema
+from midrr_classifier.labeling import attach_labels
 from midrr_classifier.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +37,37 @@ def normalize_raw_log(df: pd.DataFrame) -> pd.DataFrame:
     df["scenario_type"] = df["scenario_type"].replace(_SCENARIO_TYPE_ALIASES)
     df["event_type"] = df["event_type"].replace(_EVENT_TYPE_ALIASES)
     return df
+
+
+def resolve_session_labels(
+    df: pd.DataFrame,
+    expert_col: str = "expert_label",
+    rule_label_col: str = "prep_level",
+    rule_score_col: str = "simulation_score",
+) -> pd.DataFrame:
+    """Attach ``preparedness_level``/``label_source`` before feature building.
+
+    Thin wrapper around :func:`~midrr_classifier.labeling.attach_labels` —
+    the single call site every session source (CSV batch, and the Turso
+    ``sessions`` adapter landing in Phase 2.5 step 4) should route through
+    so expert-vs-rule label precedence is applied consistently. See
+    ``docs/labeling_rubric.md`` §7 for the expert-gold / rule-weak-label
+    policy this implements.
+
+    Args:
+        df: Session-level (or raw-log-with-broadcast-session-columns)
+            DataFrame. Any of *expert_col*/*rule_label_col*/*rule_score_col*
+            may be absent.
+
+    Returns:
+        A copy of *df* with ``preparedness_level`` and ``label_source`` set.
+    """
+    return attach_labels(
+        df,
+        expert_col=expert_col,
+        rule_label_col=rule_label_col,
+        rule_score_col=rule_score_col,
+    )
 
 
 def load_raw_logs(path: str) -> pd.DataFrame:

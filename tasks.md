@@ -73,11 +73,12 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 - [x] Verified: `pytest tests/` — 23 tests still pass; `test_feature_engineering.py`/`test_streaming.py` fail on old 6-feature names as expected (fixed in Step 7 test bump; `streaming.py` itself still needs its Step 6 update)
 - [ ] TODO carried forward: `compute_resource_utilization` doesn't yet check `extinguisher_class` against room type (no `room_type` raw field from the mod yet) — sequencing-only for now
 
-### Step 3 — Labeling
-- [ ] New `src/midrr_classifier/labeling.py`: `rule_based_label(score)` (≥75 HIGH / 40–74 MODERATE / <40 LOW), `phase_outcome_label()` (Prevention=HIGH / Intervention=MOD / Evacuation=MOD|LOW / fail=LOW)
-- [ ] Helper to compute rule-vs-expert agreement (κ) for `labeling_rubric.md` validation
-- [ ] Wire into ingestion: attach `label_source="rule"` weak labels when no expert override present
-- [ ] `docs/labeling_rubric.md` → **v1.1**: document the game rule-based label + BFP override flow, `label_source`, reaffirm circularity guard, add earthquake DCH dimensions (§4B already drafted, needs BFP/DRRMO sign-off — see Ongoing)
+### Step 3 — Labeling ✅ (2026-07-01)
+- [x] New `src/midrr_classifier/labeling.py`: `rule_based_label(score)` (≥75 HIGH / 40–74 MODERATE / <40 LOW), `phase_outcome_label()` (Prevention=HIGH / Intervention=MOD / Evacuation=MOD|LOW / fail=LOW)
+- [x] Helper to compute rule-vs-expert agreement (κ) for `labeling_rubric.md` validation — `rule_expert_agreement()` (Cohen's κ + raw agreement rate via sklearn)
+- [x] Wire into ingestion: `resolve_label()`/`attach_labels()` implement expert > rule-label > rule-score precedence; `data_ingestion.resolve_session_labels()` is the call site the Step 4 Turso/CSV loader will route through
+- [x] `docs/labeling_rubric.md` → **v1.1**: documents the game rule-based label + BFP override flow, `label_source`, reaffirms circularity guard, references `labeling.py` functions directly (earthquake DCH BFP/DRRMO sign-off still pending — tracked in Ongoing, unchanged)
+- [x] Verified: manual sanity check of all 5 functions + `pytest tests/` — same 23 pass / 2 known-broken (Step 6/7) as before, no new breakage
 
 ### Step 4 — Ingestion adapter
 - [ ] `data_ingestion.py`: new `load_sessions(source=...)` with two backends — Turso (libSQL client, env-configured `TURSO_DATABASE_URL`/auth token, parses `event_log` JSON + `move_log_csv`, maps `student_name→player_id`/`simulation_type→scenario_type`) and CSV (keep existing `load_raw_logs`/`load_feature_table`)
