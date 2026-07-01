@@ -10,12 +10,15 @@ Usage example::
     from midrr_classifier.inference import predict_preparedness
 
     features = pd.Series({
-        "evacuation_time": 42.0,
-        "decision_delay": 3.5,
+        "decision_latency": 3.5,
+        "spray_accuracy": 0.8,
         "path_efficiency_ratio": 0.72,
         "hazard_avoidance_ratio": 0.85,
+        "evacuation_time": 42.0,
         "interaction_frequency": 0.12,
-        "panic_proxy": 15.3,
+        "resource_utilization": 1.0,
+        "panic_proxy": 2.3,
+        "situational_awareness": 0.78,
     })
     label = predict_preparedness(features)
     print(label)  # "HIGH", "MODERATE", or "LOW"
@@ -103,7 +106,7 @@ def predict_preparedness(
     feature_vector = features_row[cfg.feature_cols].to_numpy().reshape(1, -1)
     prediction: str = classifier.predict(feature_vector)[0]
 
-    logger.debug("predict_preparedness → %s", prediction)
+    logger.debug("predict_preparedness -> %s", prediction)
     return prediction
 
 
@@ -118,18 +121,21 @@ def predict_preparedness_full(
     :func:`predict_preparedness` is kept for callers that only need the label.
 
     Args:
-        features_row: A :class:`pandas.Series` with the six engineered feature
+        features_row: A :class:`pandas.Series` with the nine engineered feature
             values (see :attr:`~midrr_classifier.config.MiDRRConfig.feature_cols`).
         model_path: Path to a trained model ``.pkl`` file.
         config_path: Optional YAML config path.
 
     Returns:
-        A dict with three keys:
+        A dict with four keys:
 
         - ``"label"`` – predicted class string (``"HIGH"``, ``"MODERATE"``, ``"LOW"``)
         - ``"probabilities"`` – ``{class: float}`` confidence per class, sums to 1.0
+        - ``"shap_values"`` – ``{feature_name: float}`` per-student SHAP attribution
+          for the predicted class (see ``explainability.py`` for sign convention)
         - ``"feature_importances"`` – ``{feature_name: float}`` global Gini importance
-          per feature, also sums to 1.0.  Replace with SHAP in Phase 6.
+          per feature, also sums to 1.0. Kept for training-time diagnostics only —
+          use ``shap_values`` for any per-student explanation.
 
     Raises:
         FileNotFoundError: If the model file does not exist.
@@ -164,7 +170,7 @@ def predict_preparedness_full(
         feature_cols=cfg.feature_cols,
     )
 
-    logger.debug("predict_preparedness_full → %s (proba=%s)", label, probabilities)
+    logger.debug("predict_preparedness_full -> %s (proba=%s)", label, probabilities)
     return {
         "label": label,
         "probabilities": probabilities,

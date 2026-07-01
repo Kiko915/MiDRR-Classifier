@@ -15,8 +15,10 @@ from pydantic import BaseModel, Field
 class FeaturesRequest(BaseModel):
     """Body for POST /predict when the caller sends pre-computed features.
 
-    The six fields match the engineered features produced by
-    ``feature_engineering.build_feature_table()``.
+    The nine fields match the engineered features produced by
+    ``feature_engineering.build_feature_table()`` (v1.2, post-BFP-consultation
+    9-feature contract — fire computation; see FEATURE_DEFINITIONS in
+    ``data_schema.py`` for the earthquake analog of each).
     """
 
     player_id: str = Field(..., description="Unique player / student identifier.")
@@ -25,13 +27,16 @@ class FeaturesRequest(BaseModel):
         description="Simulation scenario: 'fire', 'earthquake', 'ccs_fire', or 'ccs_earthquake'.",
     )
 
-    # The six engineered features
-    evacuation_time: float = Field(..., ge=0, description="Seconds from scenario start to assembly area.")
-    decision_delay: float = Field(..., ge=0, description="Seconds from hazard detection to first safety action.")
+    # The nine engineered features (v1.2)
+    decision_latency: float = Field(..., ge=0, description="Seconds from SIM_START to first valid safety action.")
+    spray_accuracy: float = Field(..., ge=0, le=1, description="Fraction of extinguisher sprays that hit the fire.")
     path_efficiency_ratio: float = Field(..., ge=0, le=1, description="Straight-line / total path length (0–1].")
     hazard_avoidance_ratio: float = Field(..., ge=0, le=1, description="Fraction of timesteps at safe distance [0–1].")
+    evacuation_time: float = Field(..., ge=0, description="Seconds from SIM_START to assembly area.")
     interaction_frequency: float = Field(..., ge=0, description="Qualifying safety interactions per second.")
-    panic_proxy: float = Field(..., ge=0, description="Std-dev of bearing changes (higher = more erratic).")
+    resource_utilization: float = Field(..., ge=0, le=1, description="PASS-technique sequencing correctness.")
+    panic_proxy: float = Field(..., ge=0, description="Std-dev of movement speed² (higher = more erratic).")
+    situational_awareness: float = Field(..., ge=0, le=1, description="Composite 'read the situation correctly' score.")
 
 
 class FeatureWeight(BaseModel):

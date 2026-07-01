@@ -2,7 +2,7 @@
 
 Flow (same as any REST handler you've written before):
   1. FastAPI deserialises the JSON body into FeaturesRequest (Pydantic validates it)
-  2. We build a pandas Series from those 6 feature values (the format inference.py expects)
+  2. We build a pandas Series from those 9 feature values (the format inference.py expects)
   3. We call predict_preparedness_full() which returns label + probabilities + SHAP values
   4. We sort features by |SHAP| (highest absolute impact first) and build the response
 
@@ -27,12 +27,15 @@ from midrr_classifier.inference import predict_preparedness_full
 router = APIRouter()
 
 _FEATURE_COLS = [
-    "evacuation_time",
-    "decision_delay",
+    "decision_latency",
+    "spray_accuracy",
     "path_efficiency_ratio",
     "hazard_avoidance_ratio",
+    "evacuation_time",
     "interaction_frequency",
+    "resource_utilization",
     "panic_proxy",
+    "situational_awareness",
 ]
 
 
@@ -40,7 +43,7 @@ _FEATURE_COLS = [
 def predict(body: FeaturesRequest) -> PredictResponse:
     """Predict a student's disaster preparedness level from their session features.
 
-    Accepts the six engineered features for one player in one simulation run
+    Accepts the nine engineered features for one player in one simulation run
     and returns the predicted level, a 0–100 confidence score, per-feature
     importance weights, and a personalised feedback message.
     """
@@ -83,9 +86,11 @@ def predict(body: FeaturesRequest) -> PredictResponse:
     ]
 
     # The top feature is the one with highest |SHAP| — most influential for this student.
-    top_feature = sorted_shap[0][0] if sorted_shap else "evacuation_time"
+    top_feature = sorted_shap[0][0] if sorted_shap else "decision_latency"
     top_shap_value = sorted_shap[0][1] if sorted_shap else 0.0
-    result_text = generate_result_text(label, top_feature, top_shap_value, shap_vals)
+    result_text = generate_result_text(
+        label, top_feature, top_shap_value, shap_vals, features.to_dict()
+    )
 
     return PredictResponse(
         prepLevel=label,

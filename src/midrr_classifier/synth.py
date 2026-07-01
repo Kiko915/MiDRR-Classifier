@@ -347,10 +347,16 @@ def _simulate_session(
         vx = pull * ddx + (1.0 - pull) * vx
         vz = pull * ddz + (1.0 - pull) * vz
 
-        # Normalise and apply speed
+        # Normalise and apply speed, with a per-tick speed jitter proportional
+        # to composure (noise_std): calm (HIGH) players keep a near-constant
+        # pace; panicked (LOW) players alternate bursts of sprinting and
+        # near-freezing. Without this, every tick's step length collapses to
+        # exactly `speed * _DT` regardless of skill, and panic_proxy (std-dev
+        # of speed^2, redefined in Phase 2.5 step 2) carries no real signal.
+        speed_jitter = max(0.1, float(rng.normal(1.0, noise_std / 100.0)))
         v_mag = math.hypot(vx, vz)
         if v_mag > 1e-9:
-            step = speed * _DT
+            step = speed * speed_jitter * _DT
             vx = vx / v_mag * step
             vz = vz / v_mag * step
 

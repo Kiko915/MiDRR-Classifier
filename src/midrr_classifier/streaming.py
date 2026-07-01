@@ -2,7 +2,7 @@
 
 The Minecraft mod POSTs accumulated events to the API every few seconds
 at 20 Hz. :class:`StreamingPredictor` maintains a per-session event buffer,
-recomputes all six features on each update, and returns a
+recomputes all nine features on each update, and returns a
 :class:`SnapshotResult` the dashboard can display live.
 
 Architecture
@@ -32,24 +32,30 @@ import pandas as pd
 
 from midrr_classifier.data_ingestion import normalize_raw_log
 from midrr_classifier.feature_engineering import (
-    compute_decision_delay,
+    compute_decision_latency,
     compute_evacuation_time,
     compute_hazard_avoidance_ratio,
     compute_interaction_frequency,
     compute_panic_proxy,
     compute_path_efficiency,
+    compute_resource_utilization,
+    compute_situational_awareness,
+    compute_spray_accuracy,
 )
 from midrr_classifier.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
 _FEATURE_COLS = [
-    "evacuation_time",
-    "decision_delay",
+    "decision_latency",
+    "spray_accuracy",
     "path_efficiency_ratio",
     "hazard_avoidance_ratio",
+    "evacuation_time",
     "interaction_frequency",
+    "resource_utilization",
     "panic_proxy",
+    "situational_awareness",
 ]
 
 
@@ -171,12 +177,15 @@ class StreamingPredictor:
             complete = False
         else:
             features = {
-                "evacuation_time": compute_evacuation_time(df),
-                "decision_delay": compute_decision_delay(df),
+                "decision_latency": compute_decision_latency(df),
+                "spray_accuracy": compute_spray_accuracy(df),
                 "path_efficiency_ratio": compute_path_efficiency(df),
                 "hazard_avoidance_ratio": compute_hazard_avoidance_ratio(df),
+                "evacuation_time": compute_evacuation_time(df),
                 "interaction_frequency": compute_interaction_frequency(df),
+                "resource_utilization": compute_resource_utilization(df),
                 "panic_proxy": compute_panic_proxy(df),
+                "situational_awareness": compute_situational_awareness(df),
             }
             elapsed = float(df["timestamp"].max())
             complete = buf.is_complete(df)

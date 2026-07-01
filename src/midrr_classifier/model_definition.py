@@ -75,13 +75,14 @@ class MiDRRClassifier:
             n_estimators=self.config.n_estimators,
             max_depth=self.config.max_depth,
             random_state=self.config.random_state,
-            class_weight="balanced",  # handle potential class imbalance
+            class_weight=self.config.class_weight,  # handle potential class imbalance
         )
         logger.info(
             "Built RandomForestClassifier (n_estimators=%d, max_depth=%s, "
-            "random_state=%d)",
+            "class_weight=%s, random_state=%d)",
             self.config.n_estimators,
             self.config.max_depth,
+            self.config.class_weight,
             self.config.random_state,
         )
         return self.model
