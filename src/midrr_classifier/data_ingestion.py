@@ -6,14 +6,24 @@ concerns out of feature engineering and model training code.
 
 from __future__ import annotations
 
+import io
+import json
 import os
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from sklearn.model_selection import train_test_split as _sklearn_split
 
-from midrr_classifier.data_schema import validate_feature_schema, validate_raw_schema
+from midrr_classifier.data_schema import (
+    RAW_LOG_SCHEMA,
+    validate_feature_schema,
+    validate_raw_schema,
+)
 from midrr_classifier.labeling import attach_labels
 from midrr_classifier.utils.logging_utils import get_logger
+
+if TYPE_CHECKING:
+    from midrr_classifier.config import MiDRRConfig
 
 logger = get_logger(__name__)
 
@@ -123,12 +133,218 @@ def load_feature_table(path: str) -> pd.DataFrame:
     return df
 
 
+def _parse_move_log_csv(move_log_csv: Any) -> pd.DataFrame:
+    """Parse a Turso ``sessions.move_log_csv`` cell into per-tick move rows."""
+    if not isinstance(move_log_csv, str) or not move_log_csv.strip():
+        return pd.DataFrame()
+    moves = pd.read_csv(io.StringIO(move_log_csv))
+    if "event_type" not in moves.columns:
+        moves["event_type"] = "move"
+    return moves
+
+
+def _parse_event_log(event_log: Any) -> pd.DataFrame:
+    """Parse a Turso ``sessions.event_log`` cell (JSON array) into event rows."""
+    if event_log is None or (isinstance(event_log, float) and pd.isna(event_log)):
+        return pd.DataFrame()
+    events = event_log if isinstance(event_log, list) else json.loads(event_log)
+    if not events:
+        return pd.DataFrame()
+    return pd.DataFrame(events)
+
+
+def _explode_session_row(row: "pd.Series[Any]") -> pd.DataFrame:
+    """Turn one label-resolved Turso ``sessions`` row into long-format raw-log rows.
+
+    Combines the per-event stream (``event_log``, JSON) with the per-tick
+    move stream (``move_log_csv``, embedded CSV) and broadcasts the
+    session-level identity/label columns onto every resulting row.
+    """
+    combined = pd.concat(
+        [_parse_event_log(row.get("event_log")), _parse_move_log_csv(row.get("move_log_csv"))],
+        ignore_index=True,
+        sort=False,
+    )
+    if combined.empty:
+        return combined
+
+    combined["session_id"] = row.get("session_id")
+    combined["player_id"] = row.get("student_name")
+    combined["scenario_type"] = row.get("simulation_type")
+    combined["preparedness_level"] = row.get("preparedness_level")
+    combined["label_source"] = row.get("label_source")
+    return combined
+
+
+def _sessions_table_to_raw_log(sessions_df: pd.DataFrame, expert_col: str) -> pd.DataFrame:
+    """Convert a Turso ``sessions`` table (§3b) into a validated raw-log DataFrame.
+
+    Resolves labels first (one decision per session), then explodes each
+    row's ``event_log``/``move_log_csv`` into the long-format rows
+    :func:`~midrr_classifier.feature_engineering.build_feature_table` expects.
+    """
+    sessions_df = resolve_session_labels(
+        sessions_df,
+        expert_col=expert_col,
+        rule_label_col="prep_level",
+        rule_score_col="simulation_score",
+    )
+
+    exploded = [_explode_session_row(row) for _, row in sessions_df.iterrows()]
+    exploded = [frame for frame in exploded if not frame.empty]
+    if not exploded:
+        return pd.DataFrame(columns=list(RAW_LOG_SCHEMA.keys()))
+
+    raw_df = pd.concat(exploded, ignore_index=True, sort=False)
+
+    # Some event types legitimately carry neither hazard_distance nor
+    # nearby_player_count (e.g. phase_transition) — ensure the columns exist
+    # so validate_raw_schema() checks presence, not per-row population.
+    for col in RAW_LOG_SCHEMA:
+        if col not in raw_df.columns:
+            raw_df[col] = pd.NA
+
+    raw_df = normalize_raw_log(raw_df)
+    validate_raw_schema(raw_df)
+    logger.info(
+        "Turso ingestion: %d sessions exploded into %d raw-log rows.",
+        len(sessions_df), len(raw_df),
+    )
+    return raw_df
+
+
+def load_sessions_from_turso(
+    database_url: str,
+    auth_token: str | None = None,
+    expert_col: str = "expert_label",
+    query: str = "SELECT * FROM sessions",
+) -> pd.DataFrame:
+    """Read the Turso ``sessions`` table (libSQL) and return a raw-log DataFrame.
+
+    Live counterpart to :func:`load_raw_logs` — see
+    ``docs/telemetry_contract.md`` §3b for the `sessions` schema this reads
+    (``student_name``, ``simulation_type``, ``event_log``, ``move_log_csv``,
+    ``simulation_score``, ``passed``, ``prep_level``, ``confidence``, plus
+    whatever column carries the BFP-instructor override, named *expert_col*).
+
+    Requires the optional ``libsql-client`` dependency
+    (``pip install libsql-client`` or ``pip install -e ".[turso]"``) — only
+    imported here so CSV-only usage never needs it installed.
+
+    Args:
+        database_url: Turso/libSQL connection URL
+            (``config.turso_database_url``).
+        auth_token: Turso auth token (``config.turso_auth_token``).
+        expert_col: Column on the `sessions` table carrying the
+            BFP-instructor override label, if present.
+        query: Override to filter/limit which sessions are pulled
+            (e.g. restrict to a batch or date range).
+
+    Returns:
+        A raw-log DataFrame that has passed :func:`~midrr_classifier.
+        data_schema.validate_raw_schema`, with ``preparedness_level`` and
+        ``label_source`` already resolved per session.
+    """
+    try:
+        import libsql_client
+    except ImportError as exc:  # pragma: no cover - exercised only without the extra installed
+        raise ImportError(
+            "Turso ingestion requires the optional 'libsql-client' package. "
+            "Install with `pip install libsql-client` or `pip install -e \".[turso]\"`."
+        ) from exc
+
+    client = libsql_client.create_client_sync(url=database_url, auth_token=auth_token)
+    try:
+        result = client.execute(query)
+        sessions_df = pd.DataFrame(result.rows, columns=result.columns)
+    finally:
+        client.close()
+
+    logger.info("Loaded %d session rows from Turso.", len(sessions_df))
+    return _sessions_table_to_raw_log(sessions_df, expert_col=expert_col)
+
+
+def load_sessions(
+    source: str,
+    *,
+    csv_path: str | None = None,
+    sessions_csv_path: str | None = None,
+    database_url: str | None = None,
+    auth_token: str | None = None,
+    config: "MiDRRConfig | None" = None,
+    expert_col: str = "expert_label",
+) -> pd.DataFrame:
+    """Single entry point for raw-log ingestion — CSV batch or live Turso.
+
+    Both backends return the same raw-log shape (validated against
+    :data:`~midrr_classifier.data_schema.RAW_LOG_SCHEMA`) with labels
+    already resolved through :func:`resolve_session_labels`, so callers
+    (:func:`~midrr_classifier.feature_engineering.build_feature_table`) never
+    need to know which transport the data came from.
+
+    Args:
+        source: ``"csv"`` or ``"turso"``.
+        csv_path: Path to the batched raw-log CSV (``source="csv"``,
+            required). See ``docs/telemetry_contract.md`` §3a.
+        sessions_csv_path: Optional companion ``sessions_<batch>.csv`` (§5)
+            carrying per-session ``prep_level``/``simulation_score``/
+            *expert_col*, joined on ``session_id`` to resolve labels. If
+            omitted, any ``preparedness_level`` already present in
+            *csv_path* is used as-is (fully backward compatible).
+        database_url: Turso connection URL (``source="turso"``). Falls back
+            to ``config.turso_database_url`` if *config* is given.
+        auth_token: Turso auth token. Falls back to
+            ``config.turso_auth_token``.
+        config: Optional :class:`~midrr_classifier.config.MiDRRConfig` to
+            source Turso credentials from instead of passing them directly.
+        expert_col: Column carrying the BFP-instructor override label.
+
+    Returns:
+        A validated raw-log DataFrame.
+
+    Raises:
+        ValueError: If *source* is unrecognized, or a required path/URL is
+            missing for the chosen source.
+    """
+    if source == "csv":
+        if csv_path is None:
+            raise ValueError("source='csv' requires csv_path.")
+        raw_df = load_raw_logs(csv_path)
+        if sessions_csv_path is not None:
+            sessions_df = pd.read_csv(sessions_csv_path)
+            sessions_df = resolve_session_labels(sessions_df, expert_col=expert_col)
+            raw_df = raw_df.merge(
+                sessions_df[["session_id", "preparedness_level", "label_source"]],
+                on="session_id",
+                how="left",
+                suffixes=("", "_resolved"),
+            )
+            for col in ("preparedness_level", "label_source"):
+                if f"{col}_resolved" in raw_df.columns:
+                    raw_df[col] = raw_df[f"{col}_resolved"]
+                    raw_df = raw_df.drop(columns=[f"{col}_resolved"])
+        return raw_df
+
+    if source == "turso":
+        url = database_url or (config.turso_database_url if config else None)
+        token = auth_token or (config.turso_auth_token if config else None)
+        if not url:
+            raise ValueError(
+                "source='turso' requires database_url (or config.turso_database_url)."
+            )
+        return load_sessions_from_turso(url, token, expert_col=expert_col)
+
+    raise ValueError(f"Unknown source '{source}'. Expected 'csv' or 'turso'.")
+
+
 def split_train_test(
     df: pd.DataFrame,
     test_size: float = 0.3,
     stratify_col: str = "preparedness_level",
     group_col: str = "player_id",
     random_state: int = 42,
+    label_source_col: str = "label_source",
+    enforce_expert_only_test: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Group-aware stratified split of a feature table.
 
@@ -147,6 +363,13 @@ def split_train_test(
     ``preparedness_level`` so that class proportions are approximately
     preserved in both splits despite the group constraint.
 
+    **Circularity guard (labeling_rubric.md §7):** if *label_source_col* is
+    present and carries real values, any row landing in the test split that
+    is NOT ``label_source="expert"`` is dropped from the test set (never
+    moved to train — that would leak the player into both splits). Rows
+    with no ``label_source`` info at all (legacy data, or the column
+    absent) are left untouched, so this is fully backward compatible.
+
     Args:
         df: Feature table (output of
             :func:`~midrr_classifier.feature_engineering.build_feature_table`
@@ -158,6 +381,11 @@ def split_train_test(
         group_col: Column whose values define the groups that must not
             span train and test.  Defaults to ``"player_id"``.
         random_state: Seed for reproducibility.
+        label_source_col: Column identifying ``"expert"`` vs ``"rule"``
+            labeled rows (see ``labeling.py``).
+        enforce_expert_only_test: If ``True`` (default) and *label_source_col*
+            carries real (non-null) values, drop non-expert rows from the
+            test split.
 
     Returns:
         A ``(train_df, test_df)`` tuple.  No ``player_id`` appears in
@@ -193,9 +421,30 @@ def split_train_test(
     train_df = df[df[group_col].isin(train_ids)].reset_index(drop=True)
     test_df = df[df[group_col].isin(test_ids)].reset_index(drop=True)
 
+    has_label_source_info = (
+        label_source_col in df.columns and df[label_source_col].notna().any()
+    )
+    if enforce_expert_only_test and has_label_source_info:
+        pre_count = len(test_df)
+        test_df = test_df[test_df[label_source_col] == "expert"].reset_index(drop=True)
+        dropped = pre_count - len(test_df)
+        if dropped:
+            logger.warning(
+                "Dropped %d non-expert-labeled row(s) from the test split "
+                "(circularity guard — labeling_rubric.md §7: test set must be expert-only).",
+                dropped,
+            )
+        orphaned_players = test_ids - set(test_df[group_col])
+        if orphaned_players:
+            logger.warning(
+                "%d test-split player(s) had no expert-labeled rows and "
+                "contributed zero rows to the final test set: %s",
+                len(orphaned_players), sorted(orphaned_players),
+            )
+
     logger.info(
-        "Group-aware split → train: %d rows (%d players), test: %d rows (%d players)",
+        "Group-aware split -> train: %d rows (%d players), test: %d rows (%d players)",
         len(train_df), len(train_ids),
-        len(test_df), len(test_ids),
+        len(test_df), test_df[group_col].nunique(),
     )
     return train_df, test_df

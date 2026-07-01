@@ -80,10 +80,13 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 - [x] `docs/labeling_rubric.md` → **v1.1**: documents the game rule-based label + BFP override flow, `label_source`, reaffirms circularity guard, references `labeling.py` functions directly (earthquake DCH BFP/DRRMO sign-off still pending — tracked in Ongoing, unchanged)
 - [x] Verified: manual sanity check of all 5 functions + `pytest tests/` — same 23 pass / 2 known-broken (Step 6/7) as before, no new breakage
 
-### Step 4 — Ingestion adapter
-- [ ] `data_ingestion.py`: new `load_sessions(source=...)` with two backends — Turso (libSQL client, env-configured `TURSO_DATABASE_URL`/auth token, parses `event_log` JSON + `move_log_csv`, maps `student_name→player_id`/`simulation_type→scenario_type`) and CSV (keep existing `load_raw_logs`/`load_feature_table`)
-- [ ] Label resolution: prefer expert override, else rule-based label via `labeling.py`
-- [ ] Keep group-aware `split_train_test()`; enforce expert-only test set
+### Step 4 — Ingestion adapter ✅ (2026-07-01)
+- [x] `data_ingestion.py`: new `load_sessions(source=...)` with two backends — Turso (`load_sessions_from_turso`, deferred `libsql-client` import so it's a true optional dependency, added as a poetry extra `turso`; parses `event_log` JSON + `move_log_csv` via `_sessions_table_to_raw_log`/`_explode_session_row`, maps `student_name→player_id`/`simulation_type→scenario_type`) and CSV (`load_raw_logs`/`load_feature_table` unchanged; `source="csv"` optionally joins a companion `sessions_<batch>.csv` on `session_id`)
+- [x] Label resolution: both backends route through `resolve_session_labels()` (expert override > rule label > rule score)
+- [x] Keep group-aware `split_train_test()`; **enforce expert-only test set** — non-expert rows are now dropped from the test split (never moved to train) whenever `label_source` carries real data; fully backward compatible when it's absent
+- [x] **Bug found + fixed during verification:** `labeling.resolve_label()` used Python truthiness (`if expert_label:`), and `NaN` is truthy — a missing expert override read back from CSV (`None` → `NaN` on the CSV round-trip) was silently mislabeled as `label_source="expert"` with a NaN label. Replaced with a proper `_has_value()` None/NaN/empty-string check.
+- [x] Also fixed a pre-existing latent bug hit during testing: a `→` arrow character in a `data_ingestion.py` log message crashes on Windows `cp1252` consoles (`UnicodeEncodeError`) — replaced with ASCII `->`. (Same arrow pattern exists elsewhere, e.g. `inference.py` debug logs — not fixed, out of scope for this step, flagged for later.)
+- [x] Verified: mocked Turso session row (JSON `event_log` + CSV `move_log_csv`) → exploded raw log → `build_feature_table()` 9-feature row; CSV + companion `sessions_<batch>.csv` label join; `split_train_test()` expert-only enforcement with no player overlap; unknown/incomplete `source=` raises `ValueError`. `pytest tests/` — same 23 pass / 2 known-broken, no new breakage.
 
 ### Step 5 — Synthetic data
 - [ ] `synth.py`: emit new events (ext_spray hit/miss, pin_pull, hazard_neutralize ×5, phase transitions, quake drop/cover/hold) and 9-feature signal

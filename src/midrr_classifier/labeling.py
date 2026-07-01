@@ -118,13 +118,34 @@ def resolve_label(
         ``(label, label_source)`` where ``label_source`` is ``"expert"``,
         ``"rule"``, or ``None``.
     """
-    if expert_label:
+    if _has_value(expert_label):
         return expert_label, "expert"
-    if rule_label:
+    if _has_value(rule_label):
         return rule_label, "rule"
-    if rule_score is not None:
-        return rule_based_label(rule_score), "rule"
+    if _has_value(rule_score):
+        return rule_based_label(float(rule_score)), "rule"
     return None, None
+
+
+def _has_value(x: object) -> bool:
+    """True if *x* is a real, present value — not None/NaN/empty string.
+
+    Deliberately NOT a truthiness check: ``bool(float("nan"))`` is ``True``
+    in Python, so a naive ``if x:`` treats a missing CSV cell (which
+    round-trips through ``pandas`` as ``NaN``, not ``None``) as a present
+    value. That bug silently mislabeled sessions with no expert override as
+    ``label_source="expert"`` with a NaN label.
+    """
+    if x is None:
+        return False
+    try:
+        if pd.isna(x):
+            return False
+    except (TypeError, ValueError):
+        pass  # pd.isna() on non-scalar-like input; treat as present
+    if isinstance(x, str) and not x.strip():
+        return False
+    return True
 
 
 def attach_labels(
