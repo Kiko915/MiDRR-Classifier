@@ -88,9 +88,13 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 - [x] Also fixed a pre-existing latent bug hit during testing: a `→` arrow character in a `data_ingestion.py` log message crashes on Windows `cp1252` consoles (`UnicodeEncodeError`) — replaced with ASCII `->`. (Same arrow pattern exists elsewhere, e.g. `inference.py` debug logs — not fixed, out of scope for this step, flagged for later.)
 - [x] Verified: mocked Turso session row (JSON `event_log` + CSV `move_log_csv`) → exploded raw log → `build_feature_table()` 9-feature row; CSV + companion `sessions_<batch>.csv` label join; `split_train_test()` expert-only enforcement with no player overlap; unknown/incomplete `source=` raises `ValueError`. `pytest tests/` — same 23 pass / 2 known-broken, no new breakage.
 
-### Step 5 — Synthetic data
-- [ ] `synth.py`: emit new events (ext_spray hit/miss, pin_pull, hazard_neutralize ×5, phase transitions, quake drop/cover/hold) and 9-feature signal
-- [ ] Class distribution → **HIGH 35% / MODERATE 45% / LOW 20%** across **250 sessions** (currently balanced); extend `_PROFILE` with spray-accuracy, pin-pull, situational-awareness, quake DCH-correctness params
+### Step 5 — Synthetic data ✅ (2026-07-01)
+- [x] `synth.py`: emit new events — fire: `pin_pull` → `ext_spray` (with `hit_fire`) → `hazard_neutralize` (capped at 5 per session) via `_emit_pass_sequence()`, plus `phase_transition` (prevention/intervention/evacuation); earthquake: `drop_cover_hold` (+ a second one modeling re-covering on an aftershock)
+- [x] Locked 20 Hz sampling (`_DT` 0.1 → 0.05) to match `telemetry_contract.md` v1.2
+- [x] Class distribution → **HIGH 35% / MODERATE 45% / LOW 20%** across **250 sessions** is now the *default* (`generate_logs()` with no args → 88/112/50 via `_allocate_class_counts()`, largest-remainder rounding); legacy uniform `n_per_class=` behavior still supported for notebooks/small samples
+- [x] Extended `_PROFILE` per skill with `ext_engage_prob`/`pin_pull_correct_prob`/`spray_hit_prob`/`spray_count_range` (fire) and `dch_prob`/`dch_recover_prob` (quake) — `situational_awareness` needed no new synth knob (it's a composite of already-generated signals)
+- [x] Verified: 250-session default run → exact 88/112/50 class split, 125/125 fire/earthquake, zero NaN in all 9 feature columns; per-class-per-scenario means show clean HIGH > MODERATE > LOW separation on every feature (e.g. fire `spray_accuracy` 0.53/0.31/0.16, earthquake `resource_utilization` 0.52/0.31/0.22); legacy `n_per_class=` path unchanged; `pytest tests/` — same 23 pass / 2 known-broken, no new breakage
+- [ ] Not done: `notebooks/synthetic_pipeline.ipynb` still shows 6-feature-era output — left as-is, not in this step's scope
 
 ### Step 6 — Retrain + downstream (mechanical 6→9 propagation)
 - [ ] `model_definition.py`: retrain against 9-feature config (no structural change expected)
