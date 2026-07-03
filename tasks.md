@@ -94,7 +94,7 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 - [x] Extended `_PROFILE` per skill with `ext_engage_prob`/`pin_pull_correct_prob`/`spray_hit_prob`/`spray_count_range` (fire) and `dch_prob`/`dch_recover_prob` (quake) — `situational_awareness` needed no new synth knob (it's a composite of already-generated signals)
 - [x] Verified: 250-session default run → exact 88/112/50 class split, 125/125 fire/earthquake, zero NaN in all 9 feature columns; per-class-per-scenario means show clean HIGH > MODERATE > LOW separation on every feature (e.g. fire `spray_accuracy` 0.53/0.31/0.16, earthquake `resource_utilization` 0.52/0.31/0.22); legacy `n_per_class=` path unchanged; `pytest tests/` — same 23 pass / 2 known-broken, no new breakage
 - [x] **Bug found + fixed while starting Step 6:** the movement model normalized velocity to a *fixed* magnitude every tick, so per-tick step distance was ~constant regardless of skill/`noise_std` — `panic_proxy` (speed² std-dev, redefined in step 2) carried almost no real signal and what little existed was inverted (HIGH showed *higher* "panic" than LOW). Added a per-tick `speed_jitter` scaled by `noise_std` (calm players ≈ constant pace, panicked players alternate sprint/near-freeze bursts). Re-verified: `panic_proxy` now HIGH ~2.2 < MODERATE ~6.2 < LOW ~8.0-8.3 for both scenarios — correct direction and clean separation. All other features re-checked, still properly ordered; `pytest` unaffected.
-- [ ] Not done: `notebooks/synthetic_pipeline.ipynb` still shows 6-feature-era output — left as-is, not in this step's scope
+- [x] **Done (2026-07-04):** `notebooks/synthetic_pipeline.ipynb` migrated to the 9-feature contract — imports (`compute_decision_latency` + the 3 new `compute_*`), config-sourced 9-feature list, 3×3 distribution grid, and 9-feature single-session inference; added a grouped-CV section (Phase 5) and switched importance to `compute_global_importances` (Phase 6). Re-executed end-to-end (nbconvert) so every output reflects v1.2 events and 9 features. Also fixed a latent bug: the inference cell paired `predict_proba` columns with `LABEL_CLASSES` order instead of `model.classes_` (alphabetical), mislabeling the MODERATE/LOW probabilities.
 
 ### Step 6 — Retrain + downstream (mechanical 6→9 propagation) ✅ (2026-07-01)
 - [x] `model_definition.py`: `build_model()` now reads `class_weight` from config instead of a hardcoded `"balanced"` string
@@ -156,6 +156,8 @@ into `models/metrics.json`. Verified end-to-end on 250 synthetic sessions.
 - [x] Address class imbalance — `class_weight="balanced"` default + `balanced`/`balanced_subsample` in the tuning grid; macro-F1 as the selection metric so the minority LOW class can't be ignored
 - [~] Lock final hyperparameters into `config.py`; retrain on full train split; persist `models/midrr_rf.pkl` — **mechanism done** (`--apply-best` retrains on winners; `config.py` defaults = diagram spec `100/8`; `train.csv`/`test.csv` persisted for `evaluate.py`). **Final lock is deferred to real data (Phase 4/5 re-run)** — on synthetic data every config scores 1.0 (separable by design), so there is no meaningful winner to lock yet.
 
+**Phase 5 — COMPLETE on synthetic data (2026-07-04).** Grouped CV (mean ± std), grid-search tuning, and the split→CV→(tune)→fit→persist pipeline all shipped and verified end-to-end on 250 synthetic sessions; every number merges into `models/metrics.json`. The single `[~]` item (locking final hyperparameters) is deliberately deferred until real data exists — the code path (`--apply-best`) is ready.
+
 ---
 
 ## Phase 6 — Evaluation & Explainability *(complete on synthetic data)*
@@ -172,6 +174,8 @@ alongside the Phase 5 `cv`/`tuning`/`final_fit` keys. New helpers:
 - [x] Persist all metrics to `models/metrics.json` for deterministic figure regeneration — via `update_metrics_json()` merge (survives across train/evaluate runs)
 - [x] Sanity check importances against domain intuition (`decision_latency`, `hazard_avoidance_ratio` should rank high) — soft check logged by `evaluate._log_importance_sanity_check()` (warns, never fails)
 - [x] **Bug fixed:** `print_classification_report()` passed `target_names=` without `labels=`, so sklearn fell back to alphabetical class order and silently swapped the MODERATE/LOW rows in every printed report (the confusion-matrix PNG was unaffected — it already passed `labels=`). Regression test added.
+
+**Phase 6 — COMPLETE on synthetic data (2026-07-04).** Full report (accuracy, macro + weighted P/R/F1, per-class breakdown, confusion matrix) and global importances (Gini + permutation, cross-checking the per-session SHAP) all ship via `evaluate.py` into `models/metrics.json`. Every checkbox done; suite green at 156 tests. Remaining Phase 6 substance is just re-running this on real, labeled data (Phase 3/4).
 
 ---
 
