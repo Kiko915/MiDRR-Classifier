@@ -158,14 +158,20 @@ into `models/metrics.json`. Verified end-to-end on 250 synthetic sessions.
 
 ---
 
-## Phase 6 — Evaluation & Explainability
+## Phase 6 — Evaluation & Explainability *(complete on synthetic data)*
+
+`evaluate.py` now emits the full report and merges it into `models/metrics.json`
+alongside the Phase 5 `cv`/`tuning`/`final_fit` keys. New helpers:
+`utils.metrics.compute_full_metrics()` and
+`explainability.compute_global_importances()`.
 
 - [x] Compute feature importance using SHAP (`src/midrr_classifier/explainability.py`, `TreeExplainer`) — feature-count-agnostic, verified against the retrained 9-feature model (Phase 2.5 step 6)
 - [x] Compute SHAP **per-session** (not only globally) — `predict_preparedness_full()` returns per-student SHAP values over all 9 features
-- [ ] Report accuracy, per-class precision/recall/F1 (macro + weighted), confusion matrix
-- [ ] Permutation importance as a cross-check against SHAP
-- [ ] Persist all metrics to `models/metrics.json` for deterministic figure regeneration
-- [ ] Sanity check importances against domain intuition (`decision_latency`, `hazard_avoidance_ratio` should rank high)
+- [x] Report accuracy, per-class precision/recall/F1 (macro **and** weighted), confusion matrix — `compute_full_metrics()`, written to `metrics.json["test"]`; confusion-matrix PNG unchanged
+- [x] Permutation importance as a cross-check against SHAP — `compute_global_importances()` returns Gini + permutation importances with sorted rankings (`metrics.json["importances"]`); on synthetic data both rank `decision_latency` #1
+- [x] Persist all metrics to `models/metrics.json` for deterministic figure regeneration — via `update_metrics_json()` merge (survives across train/evaluate runs)
+- [x] Sanity check importances against domain intuition (`decision_latency`, `hazard_avoidance_ratio` should rank high) — soft check logged by `evaluate._log_importance_sanity_check()` (warns, never fails)
+- [x] **Bug fixed:** `print_classification_report()` passed `target_names=` without `labels=`, so sklearn fell back to alphabetical class order and silently swapped the MODERATE/LOW rows in every printed report (the confusion-matrix PNG was unaffected — it already passed `labels=`). Regression test added.
 
 ---
 

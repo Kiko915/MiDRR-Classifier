@@ -17,6 +17,71 @@ from sklearn.metrics import (
 )
 
 
+def compute_full_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    labels: list[str],
+) -> dict[str, Any]:
+    """Full evaluation report as a JSON-serialisable dict (Phase 6).
+
+    Unlike :func:`compute_classification_metrics` (macro headline numbers
+    only), this returns the complete picture the manuscript's Chapter 1/3
+    objectives call for: overall accuracy, **both** macro- and
+    weighted-averaged precision/recall/F1, a **per-class** breakdown with
+    support, and the confusion matrix.
+
+    Macro vs weighted, in plain terms:
+        * *macro* averages the three per-class scores with equal weight — it
+          treats LOW (the rare class) as just as important as MODERATE.
+        * *weighted* averages them by how many samples each class has — it
+          reflects overall hit-rate but can hide a class the model ignores.
+    Reporting both is what makes a small-N, imbalanced result honest.
+
+    Args:
+        y_true: Ground-truth labels.
+        y_pred: Model-predicted labels.
+        labels: Ordered class names (``LABEL_CLASSES``) — fixes both the
+            per-class order and the confusion-matrix axis order.
+
+    Returns:
+        ``{"accuracy", "macro", "weighted", "per_class", "confusion_matrix",
+        "n_samples", "labels"}`` — every value a plain float/int/list so it
+        drops straight into ``metrics.json``.
+    """
+    report = classification_report(
+        y_true, y_pred, labels=labels, output_dict=True, zero_division=0
+    )
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+    per_class = {
+        label: {
+            "precision": float(report[label]["precision"]),
+            "recall": float(report[label]["recall"]),
+            "f1": float(report[label]["f1-score"]),
+            "support": int(report[label]["support"]),
+        }
+        for label in labels
+    }
+
+    return {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "macro": {
+            "precision": float(report["macro avg"]["precision"]),
+            "recall": float(report["macro avg"]["recall"]),
+            "f1": float(report["macro avg"]["f1-score"]),
+        },
+        "weighted": {
+            "precision": float(report["weighted avg"]["precision"]),
+            "recall": float(report["weighted avg"]["recall"]),
+            "f1": float(report["weighted avg"]["f1-score"]),
+        },
+        "per_class": per_class,
+        "confusion_matrix": {"labels": list(labels), "matrix": cm.tolist()},
+        "n_samples": int(len(y_true)),
+        "labels": list(labels),
+    }
+
+
 def compute_classification_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -85,9 +150,17 @@ def print_classification_report(
     Args:
         y_true: Ground-truth labels.
         y_pred: Predicted labels.
-        labels: Ordered list of class names for display.
+        labels: Ordered list of class names.  Passed as BOTH ``labels`` and
+            ``target_names`` — omitting ``labels`` lets sklearn fall back to
+            alphabetical class order while still applying *labels* as display
+            names, which silently mislabels rows when the class order is not
+            alphabetical (``LABEL_CLASSES`` is HIGH/MODERATE/LOW, not sorted).
     """
-    print(classification_report(y_true, y_pred, target_names=labels, zero_division=0))
+    print(
+        classification_report(
+            y_true, y_pred, labels=labels, target_names=labels, zero_division=0
+        )
+    )
 
 
 def plot_confusion_matrix(

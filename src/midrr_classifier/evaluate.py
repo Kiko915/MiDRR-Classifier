@@ -11,43 +11,79 @@ Run from the project root::
 Produces:
 - A per-class classification report printed to stdout.
 - A confusion-matrix PNG saved to ``models/confusion_matrix.png``.
+- The full metrics + global feature importances merged into
+  ``models/metrics.json`` (alongside the ``cv``/``tuning`` keys train.py
+  writes), so every manuscript figure regenerates deterministically.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+from typing import Any
 
 from midrr_classifier.config import load_config
 from midrr_classifier.data_ingestion import load_feature_table
 from midrr_classifier.data_schema import LABEL_CLASSES
+from midrr_classifier.explainability import compute_global_importances
 from midrr_classifier.model_definition import MiDRRClassifier
 from midrr_classifier.utils.logging_utils import get_logger, setup_root_logging
 from midrr_classifier.utils.metrics import (
-    compute_classification_metrics,
+    compute_full_metrics,
     plot_confusion_matrix,
     print_classification_report,
+    update_metrics_json,
 )
 
 logger = get_logger(__name__)
+
+# Features BFP domain intuition expects to rank highly (dev-plan Phase 6).
+# Used only for a soft sanity-check log line — never a hard assertion.
+_EXPECTED_TOP_FEATURES = ("decision_latency", "hazard_avoidance_ratio")
+
+
+def _log_importance_sanity_check(ranking: list[str]) -> None:
+    """Soft check: do BFP-expected features land in the top half of the ranking?
+
+    This is the dev-plan Phase 6 "sanity check importances against domain
+    intuition" step.  It only logs — a surprising ranking on synthetic data is
+    informative, not an error, so it must never fail the evaluation.
+    """
+    top_half = set(ranking[: max(1, len(ranking) // 2)])
+    for feat in _EXPECTED_TOP_FEATURES:
+        if feat in top_half:
+            logger.info("Sanity check OK: '%s' ranks in the top half.", feat)
+        else:
+            rank = ranking.index(feat) + 1 if feat in ranking else -1
+            logger.warning(
+                "Sanity check: BFP-expected feature '%s' ranked %d/%d "
+                "(below the top half) — worth a look on real data.",
+                feat, rank, len(ranking),
+            )
 
 
 def evaluate_model(
     model_path: str,
     test_csv_path: str,
     config_path: str | None = None,
-) -> dict[str, float]:
-    """Load a trained model and evaluate it on the test set.
+    persist: bool = True,
+) -> dict[str, Any]:
+    """Load a trained model and evaluate it on the held-out test set.
+
+    Produces the full Phase 6 report: accuracy, macro- and weighted-averaged
+    precision/recall/F1, a per-class breakdown, the confusion matrix, and
+    global feature importances (Gini + permutation) as a cross-check on the
+    per-session SHAP values used at serving time.
 
     Args:
         model_path: Path to the serialised ``.pkl`` model artifact.
         test_csv_path: Path to the test-split feature CSV.
-        config_path: Optional path to YAML config (for column names).
+        config_path: Optional path to YAML config (for column names/paths).
+        persist: If ``True``, merge the results into ``config.metrics_path``
+            and save the confusion-matrix PNG.  Set ``False`` for a dry run.
 
     Returns:
-        Dictionary of evaluation metrics (accuracy, precision, recall,
-        f1) as returned by
-        :func:`~midrr_classifier.utils.metrics.compute_classification_metrics`.
+        ``{"test": {...full metrics...}, "importances": {...gini/permutation...}}``.
     """
     cfg = load_config(config_path)
 
@@ -62,36 +98,53 @@ def evaluate_model(
     y_test = test_df[cfg.label_col].to_numpy()
 
     # ------------------------------------------------------------------
-    # Predict and compute metrics
+    # Predict and compute the full metrics report
     # ------------------------------------------------------------------
     y_pred = classifier.predict(X_test)
 
-    metrics = compute_classification_metrics(y_test, y_pred)
+    test_metrics = compute_full_metrics(y_test, y_pred, labels=LABEL_CLASSES)
     logger.info(
-        "Evaluation — accuracy: %.4f  precision: %.4f  recall: %.4f  F1: %.4f",
-        metrics["accuracy"],
-        metrics["precision"],
-        metrics["recall"],
-        metrics["f1"],
+        "Evaluation — accuracy: %.4f  macro-F1: %.4f  weighted-F1: %.4f",
+        test_metrics["accuracy"],
+        test_metrics["macro"]["f1"],
+        test_metrics["weighted"]["f1"],
     )
 
     print("\n=== MiDRR-Classifier Evaluation ===")
     print_classification_report(y_test, y_pred, labels=LABEL_CLASSES)
 
     # ------------------------------------------------------------------
-    # Confusion matrix
+    # Global feature importances (cross-check on per-session SHAP)
     # ------------------------------------------------------------------
-    cm_path = cfg.confusion_matrix_path
-    os.makedirs(os.path.dirname(cm_path) or ".", exist_ok=True)
-    plot_confusion_matrix(
+    importances = compute_global_importances(
+        classifier.model,
+        X_test,
         y_test,
-        y_pred,
-        labels=LABEL_CLASSES,
-        save_path=cm_path,
+        feature_cols=cfg.feature_cols,
+        random_state=cfg.random_state,
     )
-    logger.info("Confusion matrix saved to %s", cm_path)
+    logger.info(
+        "Top features — permutation: %s | Gini: %s",
+        importances["ranking_permutation"][:3],
+        importances["ranking_gini"][:3],
+    )
+    _log_importance_sanity_check(importances["ranking_permutation"])
 
-    return metrics
+    result: dict[str, Any] = {"test": test_metrics, "importances": importances}
+
+    # ------------------------------------------------------------------
+    # Persist: confusion matrix PNG + metrics.json (merged)
+    # ------------------------------------------------------------------
+    if persist:
+        cm_path = cfg.confusion_matrix_path
+        os.makedirs(os.path.dirname(cm_path) or ".", exist_ok=True)
+        plot_confusion_matrix(y_test, y_pred, labels=LABEL_CLASSES, save_path=cm_path)
+        logger.info("Confusion matrix saved to %s", cm_path)
+
+        update_metrics_json(cfg.metrics_path, result)
+        logger.info("Metrics merged into %s", cfg.metrics_path)
+
+    return result
 
 
 if __name__ == "__main__":
