@@ -33,9 +33,18 @@ class MiDRRConfig:
         models_dir: Directory where trained model artifacts are saved.
         n_estimators: Number of trees in the Random Forest.
         max_depth: Maximum tree depth (None = unlimited).
+        min_samples_leaf: Minimum samples required at a leaf node.  Larger
+            values make each tree shallower/simpler and guard against
+            overfitting on a small dataset (think of it as a "don't split a
+            group smaller than this" rule).
+        max_features: How many features each split may consider
+            (``"sqrt"``/``"log2"``/``None``).  Limiting it de-correlates the
+            trees, which is what makes a forest better than one tree.
         class_weight: Passed straight to ``RandomForestClassifier`` to handle
             class imbalance (e.g. ``"balanced"`` or ``None``).
         random_state: Seed for reproducibility.
+        cv_folds: Number of folds for grouped cross-validation in
+            :mod:`~midrr_classifier.model_selection` (Phase 5).
         label_col: Name of the target column in the feature table.
         feature_cols: Ordered list of feature column names fed to the
             model.  Must match the output of
@@ -56,8 +65,13 @@ class MiDRRConfig:
     # Locked to the BFP-revised simulation design spec (2026-07-01 diagrams).
     n_estimators: int = 100
     max_depth: Optional[int] = 8
+    min_samples_leaf: int = 1
+    max_features: Optional[str] = "sqrt"
     class_weight: Optional[str] = "balanced"
     random_state: int = 42
+
+    # Cross-validation / tuning (Phase 5)
+    cv_folds: int = 5
 
     # Column configuration
     label_col: str = "preparedness_level"
@@ -96,6 +110,11 @@ class MiDRRConfig:
     def confusion_matrix_path(self) -> str:
         """Path for the saved confusion-matrix PNG."""
         return os.path.join(self.models_dir, "confusion_matrix.png")
+
+    @property
+    def metrics_path(self) -> str:
+        """Path for the persisted metrics JSON (CV/tuning/eval results)."""
+        return os.path.join(self.models_dir, "metrics.json")
 
 
 def load_config(path: Optional[str] = None) -> MiDRRConfig:

@@ -143,13 +143,18 @@ This phase **blocks** Phases 3–9 doing anything meaningful under the old 6-fea
 
 ---
 
-## Phase 5 — Model Training, Tuning, Validation
+## Phase 5 — Model Training, Tuning, Validation *(pipeline complete on synthetic data; final lock pending real data)*
 
-- [ ] Train baseline RF with defaults; record metrics as the floor
-- [ ] Stratified k-fold CV (k=5) — report **mean ± std**, not a single split
-- [ ] Hyperparameter search over `n_estimators`, `max_depth`, `min_samples_leaf`, `max_features`, `class_weight` (diagram spec starting point: `n_estimators=100`, `max_depth=8`)
-- [ ] Address class imbalance (`class_weight="balanced"` and/or resampling)
-- [ ] Lock final hyperparameters into `config.py`; retrain on full train split; persist `models/midrr_rf.pkl`
+Implemented `src/midrr_classifier/model_selection.py` (grouped CV + grid search),
+factored RF construction into `model_definition.build_estimator()`, and rewired
+`train.py` to split → CV → (optional tune) → fit → persist. All numbers merge
+into `models/metrics.json`. Verified end-to-end on 250 synthetic sessions.
+
+- [x] Train baseline RF with defaults; record metrics as the floor — grouped-CV of the default config is the floor, written to `metrics.json["cv"]`
+- [x] **Stratified k-fold CV (k=5) — report mean ± std** — `cross_validate_grouped()` via `StratifiedGroupKFold` (group-aware: no `player_id` across folds); reports accuracy/f1_macro/precision_macro/recall_macro
+- [x] Hyperparameter search over `n_estimators`, `max_depth`, `min_samples_leaf`, `max_features`, `class_weight` — `tune_hyperparameters()` (`GridSearchCV`, same grouped CV, refit on macro-F1); `python -m midrr_classifier.train --tune`
+- [x] Address class imbalance — `class_weight="balanced"` default + `balanced`/`balanced_subsample` in the tuning grid; macro-F1 as the selection metric so the minority LOW class can't be ignored
+- [~] Lock final hyperparameters into `config.py`; retrain on full train split; persist `models/midrr_rf.pkl` — **mechanism done** (`--apply-best` retrains on winners; `config.py` defaults = diagram spec `100/8`; `train.csv`/`test.csv` persisted for `evaluate.py`). **Final lock is deferred to real data (Phase 4/5 re-run)** — on synthetic data every config scores 1.0 (separable by design), so there is no meaningful winner to lock yet.
 
 ---
 

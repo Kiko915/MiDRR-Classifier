@@ -10,7 +10,7 @@ import pytest
 from sklearn.ensemble import RandomForestClassifier
 
 from midrr_classifier.config import MiDRRConfig
-from midrr_classifier.model_definition import MiDRRClassifier
+from midrr_classifier.model_definition import MiDRRClassifier, build_estimator
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +73,24 @@ def test_model_class_weight_defaults_to_balanced() -> None:
 
 def test_model_random_state(config: MiDRRConfig, classifier: MiDRRClassifier) -> None:
     assert classifier.model.random_state == config.random_state
+
+
+def test_build_model_honors_leaf_and_features() -> None:
+    # Phase 5: min_samples_leaf / max_features must flow from config into the RF.
+    cfg = MiDRRConfig(min_samples_leaf=4, max_features="log2")
+    clf = MiDRRClassifier(cfg)
+    clf.build_model()
+    assert clf.model.min_samples_leaf == 4
+    assert clf.model.max_features == "log2"
+
+
+def test_build_estimator_overrides_win_over_config() -> None:
+    # The tuning grid relies on **overrides beating config defaults.
+    cfg = MiDRRConfig(n_estimators=100, max_depth=8)
+    est = build_estimator(cfg, n_estimators=7, max_depth=2)
+    assert est.n_estimators == 7
+    assert est.max_depth == 2
+    assert est.random_state == cfg.random_state  # untouched default still applied
 
 
 # ---------------------------------------------------------------------------

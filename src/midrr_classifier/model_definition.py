@@ -33,6 +33,37 @@ from midrr_classifier.utils.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def build_estimator(
+    config: MiDRRConfig, **overrides: object
+) -> RandomForestClassifier:
+    """Construct a ``RandomForestClassifier`` from config hyper-parameters.
+
+    Single source of truth for how the forest is built, so training
+    (:class:`MiDRRClassifier`), cross-validation, and the hyper-parameter
+    search in :mod:`~midrr_classifier.model_selection` all instantiate the
+    estimator identically.
+
+    Args:
+        config: The project configuration supplying default hyper-parameters.
+        **overrides: Any ``RandomForestClassifier`` keyword to override a
+            config default — used by the tuning grid to swap in candidate
+            values (e.g. ``max_depth=6``) without mutating *config*.
+
+    Returns:
+        An unfitted :class:`~sklearn.ensemble.RandomForestClassifier`.
+    """
+    params: dict[str, object] = {
+        "n_estimators": config.n_estimators,
+        "max_depth": config.max_depth,
+        "min_samples_leaf": config.min_samples_leaf,
+        "max_features": config.max_features,
+        "class_weight": config.class_weight,  # handle potential class imbalance
+        "random_state": config.random_state,
+    }
+    params.update(overrides)
+    return RandomForestClassifier(**params)
+
+
 class MiDRRClassifier:
     """Random Forest classifier for Minecraft disaster-preparedness prediction.
 
@@ -71,17 +102,15 @@ class MiDRRClassifier:
         Returns:
             The newly created :class:`~sklearn.ensemble.RandomForestClassifier`.
         """
-        self.model = RandomForestClassifier(
-            n_estimators=self.config.n_estimators,
-            max_depth=self.config.max_depth,
-            random_state=self.config.random_state,
-            class_weight=self.config.class_weight,  # handle potential class imbalance
-        )
+        self.model = build_estimator(self.config)
         logger.info(
             "Built RandomForestClassifier (n_estimators=%d, max_depth=%s, "
-            "class_weight=%s, random_state=%d)",
+            "min_samples_leaf=%d, max_features=%s, class_weight=%s, "
+            "random_state=%d)",
             self.config.n_estimators,
             self.config.max_depth,
+            self.config.min_samples_leaf,
+            self.config.max_features,
             self.config.class_weight,
             self.config.random_state,
         )

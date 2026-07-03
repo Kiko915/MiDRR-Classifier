@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import json
+import os
+from typing import Any, Optional
 
 import numpy as np
 from sklearn.metrics import (
@@ -41,6 +43,36 @@ def compute_classification_metrics(
             f1_score(y_true, y_pred, average="macro", zero_division=0)
         ),
     }
+
+
+def update_metrics_json(path: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Merge *updates* into the metrics JSON at *path* and write it back.
+
+    Uses merge (not overwrite) so different phases can own different top-level
+    keys — e.g. training writes ``"cv"``/``"tuning"``, and Phase 6 evaluation
+    later adds ``"test"`` to the same file without clobbering them.
+
+    Args:
+        path: Destination JSON path (typically ``config.metrics_path``).
+        updates: Top-level keys to set/replace.
+
+    Returns:
+        The full merged dict that was written.
+    """
+    existing: dict[str, Any] = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as fh:
+            try:
+                existing = json.load(fh)
+            except json.JSONDecodeError:
+                existing = {}
+
+    existing.update(updates)
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(existing, fh, indent=2, sort_keys=True)
+    return existing
 
 
 def print_classification_report(
