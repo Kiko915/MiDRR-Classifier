@@ -105,3 +105,4 @@ Do not add `Co-Authored-By: Claude` trailers to commits in this repo.
 - `docs/telemetry_contract.md` — v1.1 spec for what the Minecraft mod must emit. This is the cross-repo dependency on Necookie.
 - `docs/labeling_rubric.md` — how `preparedness_level` labels are produced by BFP/teacher expert raters; includes the circularity guard and κ protocol.
 - `docs/MiDRR_ML_Development_Plan.md` — phased development roadmap (Phases 1–9) with manuscript mapping.
+- `docs/WEB_INTEGRATION_GUIDE.md` — cross-repo contract doc for `BERONG_SMP_WEB` (the dashboard) integrating against the deployed API: endpoints, request/response TypeScript shapes, the CORS/auth gaps to resolve, and the synthetic-model caveat on the live deployment.
