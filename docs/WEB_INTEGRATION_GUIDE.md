@@ -214,10 +214,13 @@ interface SessionSnapshotResponse {
 
 Features computed on partial data are meaningful, not garbage: e.g.
 `hazard_avoidance_ratio` is "fraction of ticks at safe distance *so far*."
-But `resource_utilization`/`spray_accuracy` won't exist in the dict until at
-least one relevant event (`pin_pull`/`ext_spray`/`drop_cover_hold`) has
-happened — handle missing keys in the UI rather than assuming all 9 are
-always present mid-session.
+All 9 keys are **always present** in the dict, even before any relevant
+event has happened — `StreamingPredictor` computes every feature on every
+update, and each `compute_*` function has an explicit zero-event default
+(e.g. `spray_accuracy` is `0.0` with no sprays attempted yet;
+`resource_utilization` is `1.0`, "vacuously correct," with no spray
+attempted at all). No need to guard for missing keys — do handle the
+values being provisional/low-confidence early in a session.
 
 **Important operational limitation:** the session buffer is **in-process
 memory**, not a database. If the API restarts (e.g. a Render redeploy, or

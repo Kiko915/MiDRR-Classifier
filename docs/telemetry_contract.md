@@ -228,7 +228,7 @@ POST /session/{session_id}/events
 - `prediction` is `null` until a trained model is loaded on the server.
 - `prep_score` is the winning class probability scaled to 0–100.
 - `is_complete` becomes `true` once `assembly_area_reached` is received; the dashboard can then show the final result.
-- Features computed on **partial data** are meaningful: e.g. `hazard_avoidance_ratio` is the fraction of ticks at safe distance *so far*, not the final value. `resource_utilization` and `spray_accuracy` are `null`/undefined until at least one `pin_pull`/`ext_spray` (or `drop_cover_hold`) has occurred.
+- Features computed on **partial data** are meaningful: e.g. `hazard_avoidance_ratio` is the fraction of ticks at safe distance *so far*, not the final value. All 9 feature keys are **always present**, even before any relevant event — `StreamingPredictor` computes every feature on every update, and each has an explicit zero-event default (e.g. `spray_accuracy` is `0.0` with no `pin_pull`/`ext_spray`/`drop_cover_hold` yet; `resource_utilization` is `1.0`, "vacuously correct," with no spray attempted at all). No key is ever `null`/undefined.
 
 ### 6d. Session lifecycle
 
