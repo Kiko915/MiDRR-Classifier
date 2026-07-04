@@ -16,3 +16,4 @@ docs/
 data/raw/
 data/processed/
 *.md
+!README.md

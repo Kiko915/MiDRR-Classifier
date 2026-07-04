@@ -1,0 +1,18 @@
+# Render Blueprint — https://dashboard.render.com/blueprints
+# "New +" -> "Blueprint" -> point at this repo; Render reads this file and
+# provisions the service automatically (no manual dashboard configuration).
+#
+# Free-tier web services spin down after ~15 min idle and cold-start on the
+# next request (Docker + synthetic-model bootstrap adds to that cold start).
+# Pair with an UptimeRobot ping (every ~10 min) against /health to keep it
+# warm for demos/defense (see tasks.md Phase 7).
+services:
+  - type: web
+    name: midrr-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: true
