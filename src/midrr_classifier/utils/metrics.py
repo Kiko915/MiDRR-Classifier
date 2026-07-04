@@ -181,6 +181,8 @@ def plot_confusion_matrix(
     import matplotlib.pyplot as plt
     import seaborn as sns
 
+    plt.switch_backend("Agg")  # headless: this env's default TkAgg backend is broken
+
     cm = confusion_matrix(y_true, y_pred, labels=labels)
 
     fig, ax = plt.subplots(figsize=(6, 5))

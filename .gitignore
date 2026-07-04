@@ -26,6 +26,7 @@ models/*.joblib
 
 # Evaluation outputs
 models/*.png
+models/figures/
 
 # Jupyter
 .ipynb_checkpoints/

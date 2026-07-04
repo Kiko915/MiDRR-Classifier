@@ -199,9 +199,16 @@ alongside the Phase 5 `cv`/`tuning`/`final_fit` keys. New helpers:
 
 ---
 
-## Phase 9 — Manuscript & Defense Support
+## Phase 9 — Manuscript & Defense Support *(figure generation complete on synthetic data)*
 
-- [ ] Generate publication-quality figures: confusion matrix, feature-importance bar chart, per-class metrics table, CV variance plot
+New `src/midrr_classifier/reporting.py` reads **only** `models/metrics.json` (no
+model/data reload) and regenerates all four artifacts deterministically —
+`python -m midrr_classifier.reporting` writes into `models/figures/`.
+
+- [x] Generate publication-quality figures: confusion matrix, feature-importance bar chart, per-class metrics table, CV variance plot — `plot_confusion_matrix_figure()`, `plot_feature_importance_figure()` (permutation vs. Gini side-by-side, same feature order for cross-checking), `render_per_class_table()` (CSV + Markdown), `plot_cv_variance_figure()` (mean±std bars with per-fold scatter dots); `generate_all_figures()` orchestrates all four, skipping whichever a partial `metrics.json` can't yet support (e.g. right after `train.py`, before `evaluate.py`)
+- [x] **Bug found + fixed:** `update_metrics_json` persists with `sort_keys=True` (for deterministic diffs), which silently alphabetizes the `per_class` dict's keys on disk (`HIGH, LOW, MODERATE`) even though `LABEL_CLASSES` is `HIGH/MODERATE/LOW` — same bug class as the printed-report and predict_proba label swaps found in Phase 6/2.5. The `"labels"` list survives untouched (`sort_keys` only reorders dict keys, not list contents), so `render_per_class_table()` now orders rows off that list instead of dict iteration order. Regression test added (round-trips through the real `update_metrics_json`).
+- [x] **Bug found + fixed (pre-existing, surfaced during verification):** this dev machine's matplotlib defaults to the `TkAgg` backend, whose Tcl/Tk install is broken here, causing intermittent `TclError` crashes on any figure creation (including the existing `utils.metrics.plot_confusion_matrix` used since Phase 6). Both that function and every new `reporting.py` figure function now call `plt.switch_backend("Agg")` before creating a figure — safe since these are always saved to disk, never shown interactively.
+- [x] Verified end-to-end: synthetic train → evaluate → `generate_all_figures()` on 250 sessions produces a correctly-labeled confusion matrix, a feature-importance chart (`decision_latency` top in both panels), a CV-variance chart (mean±std + per-fold dots), and CSV+Markdown per-class tables — all in the correct HIGH/MODERATE/LOW order after a real JSON round-trip. New `tests/test_reporting.py` (16 tests) — full suite now 172.
 - [ ] Write Chapter 4 results narrative (model performance + which behaviors drive preparedness)
 - [ ] Prepare reproducibility appendix: fixed seeds, `config.py` snapshot, `requirements.txt`, data version hash
 - [ ] Defense Q&A prep: why RF over alternatives, why 9 features (and how they replaced the original 6), how labels were obtained (expert + rule-based hybrid) and their κ, small-N generalization limits

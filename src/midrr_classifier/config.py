@@ -116,6 +116,11 @@ class MiDRRConfig:
         """Path for the persisted metrics JSON (CV/tuning/eval results)."""
         return os.path.join(self.models_dir, "metrics.json")
 
+    @property
+    def figures_dir(self) -> str:
+        """Directory for the manuscript figures generated from metrics.json (Phase 9)."""
+        return os.path.join(self.models_dir, "figures")
+
 
 def load_config(path: Optional[str] = None) -> MiDRRConfig:
     """Build a :class:`MiDRRConfig`, optionally merging overrides from YAML.
