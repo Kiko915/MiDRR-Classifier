@@ -97,4 +97,5 @@ def predict(body: FeaturesRequest) -> PredictResponse:
         prepScore=prep_score,
         featureImportance=feature_importance_list,
         resultText=result_text,
+        dataProvenance=result.get("data_provenance", "unknown"),
     )

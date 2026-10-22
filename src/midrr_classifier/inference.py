@@ -127,7 +127,7 @@ def predict_preparedness_full(
         config_path: Optional YAML config path.
 
     Returns:
-        A dict with four keys:
+        A dict with five keys:
 
         - ``"label"`` – predicted class string (``"HIGH"``, ``"MODERATE"``, ``"LOW"``)
         - ``"probabilities"`` – ``{class: float}`` confidence per class, sums to 1.0
@@ -136,6 +136,8 @@ def predict_preparedness_full(
         - ``"feature_importances"`` – ``{feature_name: float}`` global Gini importance
           per feature, also sums to 1.0. Kept for training-time diagnostics only —
           use ``shap_values`` for any per-student explanation.
+        - ``"data_provenance"`` – ``"synthetic"``/``"real"``/``"mixed"``/``"unknown"``,
+          the source of the data the loaded model was trained on.
 
     Raises:
         FileNotFoundError: If the model file does not exist.
@@ -176,4 +178,6 @@ def predict_preparedness_full(
         "probabilities": probabilities,
         "shap_values": shap_contributions,
         "feature_importances": global_importances,
+        # Stamped by train.py; models trained before that change report "unknown".
+        "data_provenance": getattr(classifier.model, "midrr_data_provenance_", "unknown"),
     }

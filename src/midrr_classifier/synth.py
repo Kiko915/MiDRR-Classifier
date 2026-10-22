@@ -19,10 +19,11 @@ Events follow telemetry contract v1.2 (``docs/telemetry_contract.md``):
 - ``preparedness_level`` is included per row (ground-truth label, set by
   caller).  Real telemetry never carries this column — it is added here
   only so the batch CSV can be fed straight into ``build_feature_table()``.
-  ``label_source`` is deliberately NOT set — synthetic labels are ground
-  truth by construction, not an expert/rule weak label, and leaving the
-  column absent keeps ``split_train_test()``'s expert-only-test-set guard
-  a no-op for synthetic data (see ``data_ingestion.split_train_test``).
+  ``label_source="synthetic"`` is set on every row so the provenance survives
+  feature engineering into features.csv, metrics.json, the figures and the
+  API response. ``split_train_test()``'s expert-only test-set guard allows a
+  fully synthetic dataset to be evaluated on itself, but drops synthetic rows
+  from the test split whenever real data is mixed in.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from midrr_classifier.data_schema import (
     PIN_PULL_EVENT,
     SAFE_HAZARD_DISTANCE,
     SIM_PHASES,
+    SYNTHETIC_LABEL_SOURCE,
 )
 
 # ---------------------------------------------------------------------------
@@ -536,5 +538,6 @@ def generate_logs(
                 all_rows.extend(rows)
 
     df = pd.DataFrame(all_rows)
-    df["data_source"] = "synthetic"  # provenance tag — filter this out before real training
+    df["data_source"] = SYNTHETIC_LABEL_SOURCE  # provenance tag — filter this out before real training
+    df["label_source"] = SYNTHETIC_LABEL_SOURCE  # carried through build_feature_table()
     return df

@@ -245,3 +245,11 @@ def test_generate_all_figures_missing_file_raises(tmp_path) -> None:
         reporting.generate_all_figures(
             metrics_path=str(tmp_path / "nope.json"), output_dir=str(tmp_path / "out")
         )
+
+
+def test_figures_are_tagged_synthetic(tmp_path) -> None:
+    from midrr_classifier.reporting import _provenance_suffix
+
+    assert _provenance_suffix({"data_provenance": {"source": "synthetic"}}) == " [SYNTHETIC DATA]"
+    assert _provenance_suffix({"data_provenance": {"source": "real"}}) == ""
+    assert _provenance_suffix({}) == ""

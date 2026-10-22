@@ -117,8 +117,18 @@ interface PredictResponse {
   prepScore: number;   // 0–100, confidence in prepLevel
   featureImportance: { feature: string; weight: number }[]; // sorted by |weight| desc
   resultText: string;  // human-readable adaptive feedback, ready to display as-is
+  dataProvenance: "synthetic" | "real" | "mixed" | "unknown"; // what the serving model was trained on
 }
 ```
+
+`dataProvenance` is additive (older clients can ignore it). When it is
+`"synthetic"`, show a "placeholder — not a real assessment" badge next to the
+result. Models trained before this field existed report `"unknown"`.
+
+**Errors:** a value that breaks the contract (missing field, out of range,
+text instead of a number, or the JSON literals `Infinity`/`NaN`) returns
+**422** with FastAPI's usual `detail` array. A non-finite input is echoed back
+as a string (`"inf"`, `"nan"`).
 
 `featureImportance[].weight` is a **signed SHAP value** for this specific
 student, not a global ranking: positive = pushed toward `prepLevel` (a

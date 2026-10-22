@@ -284,3 +284,76 @@ class TestTursoIngestion:
         monkeypatch.setitem(sys.modules, "libsql_client", None)
         with pytest.raises(ImportError, match="libsql-client"):
             load_sessions_from_turso("libsql://fake-db")
+
+
+# ---------------------------------------------------------------------------
+# Synthetic provenance (D-003 MR-09)
+# ---------------------------------------------------------------------------
+
+
+def test_all_synthetic_dataset_keeps_its_synthetic_test_split() -> None:
+    df = _make_feature_table(n_players=30, label_source="synthetic")
+    train, test = split_train_test(df, test_size=0.3, random_state=42)
+    assert len(train) + len(test) == len(df)
+    assert (test["label_source"] == "synthetic").all()
+
+
+def test_synthetic_rows_dropped_from_test_when_mixed_with_real() -> None:
+    expert = _make_feature_table(n_players=15, label_source="expert")
+    synthetic = _make_feature_table(n_players=15, label_source="synthetic")
+    synthetic["player_id"] = "s" + synthetic["player_id"]
+    _, test = split_train_test(pd.concat([expert, synthetic], ignore_index=True), test_size=0.3, random_state=42)
+    assert (test["label_source"] == "expert").all()
+
+
+# ---------------------------------------------------------------------------
+# Testing-instrument Minor regressions (D-010 DF-04, D-011 DF-02)
+# ---------------------------------------------------------------------------
+
+
+def test_load_feature_table_rejects_out_of_range_values(tmp_path) -> None:
+    from midrr_classifier.data_ingestion import load_feature_table
+
+    df = _make_feature_table(n_players=3)
+    df.loc[0, "path_efficiency_ratio"] = 1.7
+    df.loc[1, "hazard_avoidance_ratio"] = -0.2
+    df.loc[2, "evacuation_time"] = -5.0
+    df["label_source"] = None
+    path = tmp_path / "features.csv"
+    df.to_csv(path, index=False)
+    with pytest.raises(ValueError, match="out-of-range"):
+        load_feature_table(str(path))
+
+
+def test_load_feature_table_accepts_valid_values(tmp_path) -> None:
+    from midrr_classifier.data_ingestion import load_feature_table
+
+    df = _make_feature_table(n_players=3)
+    df["label_source"] = None
+    path = tmp_path / "features.csv"
+    df.to_csv(path, index=False)
+    assert len(load_feature_table(str(path))) == len(df)
+
+
+def test_find_out_of_range_rows_flags_infinity_and_nan() -> None:
+    from midrr_classifier.data_schema import find_out_of_range_rows
+
+    df = _make_feature_table(n_players=2)
+    df.loc[0, "panic_proxy"] = float("inf")
+    df.loc[1, "decision_latency"] = float("nan")
+    assert sorted(find_out_of_range_rows(df)) == [0, 1]
+
+
+def test_flag_unknown_event_types_reports_but_keeps_rows() -> None:
+    from midrr_classifier.data_ingestion import flag_unknown_event_types
+
+    df = pd.DataFrame({"event_type": ["move", "door_open", "teleport_hack", "move"]})
+    assert flag_unknown_event_types(df) == ["teleport_hack"]
+    assert df.attrs["unknown_event_types"] == ["teleport_hack"]
+    assert len(df) == 4  # warned about, not dropped
+
+
+def test_flag_unknown_event_types_clean_log() -> None:
+    from midrr_classifier.data_ingestion import flag_unknown_event_types
+
+    assert flag_unknown_event_types(pd.DataFrame({"event_type": ["move", "session_start"]})) == []

@@ -29,10 +29,13 @@ from midrr_classifier.data_schema import (
     DECISION_LATENCY_ACTION_TYPES,
     DROP_COVER_HOLD_EVENT,
     EARTHQUAKE_DECISION_LATENCY_ACTION_TYPES,
+    EARTHQUAKE_INTERACTION_EVENT_TYPES,
     EXT_SPRAY_EVENT,
     INTERACTION_EVENT_TYPES,
     PIN_PULL_EVENT,
+    REQUIRED_VALUE_COLUMNS,
     SAFE_HAZARD_DISTANCE,
+    find_out_of_range_rows,
 )
 from midrr_classifier.utils.logging_utils import get_logger
 
@@ -62,13 +65,15 @@ def _scenario_of(events_df: pd.DataFrame) -> object:
 
 
 def compute_evacuation_time(events_df: pd.DataFrame) -> float:
-    """Seconds from SIM_START (t=0) to reaching the assembly area.
+    """Seconds from SIM_START to reaching the assembly area.
 
     True evacuation success = ``assembly_area_reached``, not ``emergency_exit``
     (BFP: 'proceed to the closest assembly area'). If the player never reaches
     the assembly area, the scenario time-limit is used as the cap (taken from
     the ``session_end`` timestamp). Falls back to ``timestamp.max`` if
-    ``session_end`` is also absent. Earthquake runs use the same computation
+    ``session_end`` is also absent. SIM_START is the ``session_start`` event
+    (or the earliest event), subtracted so the result is elapsed time even if
+    the clock did not start at 0. Earthquake runs use the same computation
     — evacuation credit still ends at ``assembly_area_reached``, which by
     convention only fires after shaking stops.
 
@@ -81,15 +86,17 @@ def compute_evacuation_time(events_df: pd.DataFrame) -> float:
     if events_df.empty:
         return 0.0
 
-    assembly = events_df[events_df["event_type"] == "assembly_area_reached"]
-    if not assembly.empty:
-        return float(assembly["timestamp"].iloc[0])
+    # Measured from SIM_START, same anchor as decision_latency, so a mod that
+    # logs session_start at a non-zero clock value still gets elapsed seconds.
+    return _evacuation_window_end(events_df) - _sim_start(events_df)
 
-    session_end = events_df[events_df["event_type"] == "session_end"]
-    if not session_end.empty:
-        return float(session_end["timestamp"].iloc[0])
 
-    return float(events_df["timestamp"].max())
+def _sim_start(events_df: pd.DataFrame) -> float:
+    """SIM_START timestamp: the ``session_start`` event, else the earliest event."""
+    sim_start = events_df[events_df["event_type"] == "session_start"]
+    if not sim_start.empty:
+        return float(sim_start["timestamp"].min())
+    return float(events_df["timestamp"].min())
 
 
 def compute_decision_latency(events_df: pd.DataFrame) -> float:
@@ -121,8 +128,7 @@ def compute_decision_latency(events_df: pd.DataFrame) -> float:
 
     df = events_df.sort_values("timestamp")
 
-    sim_start = df[df["event_type"] == "session_start"]
-    t0 = float(sim_start["timestamp"].iloc[0]) if not sim_start.empty else float(df["timestamp"].min())
+    t0 = _sim_start(df)
 
     action_types = (
         EARTHQUAKE_DECISION_LATENCY_ACTION_TYPES
@@ -237,6 +243,15 @@ def compute_path_efficiency(events_df: pd.DataFrame) -> float:
     return min(straight / total_path, 1.0)
 
 
+def _evacuation_window_end(events_df: pd.DataFrame) -> float:
+    """Timestamp that closes the scored window: assembly, else session_end, else last event."""
+    for event_type in ("assembly_area_reached", "session_end"):
+        rows = events_df[events_df["event_type"] == event_type]
+        if not rows.empty:
+            return float(rows["timestamp"].iloc[0])
+    return float(events_df["timestamp"].max())
+
+
 def compute_hazard_avoidance_ratio(events_df: pd.DataFrame) -> float:
     """Fraction of timesteps where the player maintained a safe distance.
 
@@ -244,30 +259,50 @@ def compute_hazard_avoidance_ratio(events_df: pd.DataFrame) -> float:
     hazards (fire, or falling-hazard zones for earthquake — same
     computation, different hazard set per telemetry_contract.md).
 
+    Per FEATURE_DEFINITIONS the denominator is per-tick timesteps inside the
+    SIM_START → assembly_area_reached (or scenario end) window, so:
+
+    * only ``move`` ticks are counted — discrete events (alarm, door,
+      phase_transition, ...) are not timesteps. If a log carries no ``move``
+      rows at all, every event row is used as a fallback.
+    * rows after the window closes (post-assembly wandering) are excluded.
+    * rows whose ``hazard_distance`` is blank are excluded rather than being
+      counted as unsafe — a missing measurement is not evidence of danger.
+
     TODO: Align SAFE_HAZARD_DISTANCE threshold with Chapter 3 rubric.
 
     Args:
         events_df: Event log for a single player × run.
 
     Returns:
-        Ratio in [0, 1].
+        Ratio in [0, 1]. 0.0 if no timestep carries a hazard distance.
     """
     if events_df.empty:
         return 0.0
-    safe = (events_df["hazard_distance"] >= SAFE_HAZARD_DISTANCE).sum()
-    return float(safe / len(events_df))
+
+    in_window = events_df[events_df["timestamp"] <= _evacuation_window_end(events_df)]
+    ticks = in_window[in_window["event_type"] == "move"]
+    if ticks.empty:
+        ticks = in_window
+
+    distance = pd.to_numeric(ticks["hazard_distance"], errors="coerce").dropna()
+    if distance.empty:
+        return 0.0
+    return float((distance >= SAFE_HAZARD_DISTANCE).mean())
 
 
 def compute_interaction_frequency(events_df: pd.DataFrame) -> float:
     """Rate of qualifying safety interactions per second of scenario time.
 
-    Qualifying events are those in
+    FIRE: qualifying events are those in
     :data:`~midrr_classifier.data_schema.INTERACTION_EVENT_TYPES`, with one
     exception: ``extinguisher_use``/``ext_spray`` are excluded when
     ``nearby_player_count`` is 0 (BFP rule: *"DO NOT FIGHT FIRE IF ALONE"*).
     Solo extinguisher use is a procedure violation and must not raise the
-    frequency score. Earthquake runs count ``drop_cover_hold`` in place of
-    extinguisher events (cover-taking is the qualifying interaction).
+    frequency score.
+    EARTHQUAKE: qualifying events are
+    :data:`~midrr_classifier.data_schema.EARTHQUAKE_INTERACTION_EVENT_TYPES`
+    (``drop_cover_hold``, ``emergency_exit``, ``assembly_area_reached``).
 
     Args:
         events_df: Event log for a single player × run.
@@ -279,10 +314,13 @@ def compute_interaction_frequency(events_df: pd.DataFrame) -> float:
     if duration == 0.0:
         return 0.0
 
+    if _is_earthquake_scenario(_scenario_of(events_df)):
+        qualifying = events_df["event_type"].isin(EARTHQUAKE_INTERACTION_EVENT_TYPES)
+        return float(qualifying.sum() / duration)
+
     qualifying = events_df["event_type"].isin(INTERACTION_EVENT_TYPES)
 
-    # Remove solo extinguisher interactions (fire only; drop_cover_hold has
-    # no "alone" penalty under BFP procedure).
+    # Remove solo extinguisher interactions (BFP: "DO NOT FIGHT FIRE IF ALONE").
     if "nearby_player_count" in events_df.columns:
         solo_interaction = events_df["event_type"].isin(
             {"extinguisher_use", EXT_SPRAY_EVENT}
@@ -416,12 +454,41 @@ def compute_situational_awareness(events_df: pd.DataFrame) -> float:
 # ---------------------------------------------------------------------------
 
 
-def build_feature_table(events_df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate raw event logs into one feature row per player per run.
+def find_incomplete_sessions(events_df: pd.DataFrame) -> pd.Series:
+    """Boolean mask of rows belonging to a session with a blank required value.
 
-    Applies all ``compute_*`` functions to each ``(player_id,
-    scenario_type)`` group and assembles the results into a tidy
-    feature table.
+    A session is incomplete if ANY of its rows is missing a value in
+    :data:`~midrr_classifier.data_schema.REQUIRED_VALUE_COLUMNS` — e.g. an
+    ``assembly_area_reached`` row with no timestamp. Such a session cannot
+    produce trustworthy features (evacuation_time, latency, ... would silently
+    become NaN or wrong), so it must be flagged rather than scored.
+
+    Sessions are identified by ``session_id`` when present; rows whose
+    identity columns are themselves blank are flagged on their own.
+    """
+    present = [c for c in REQUIRED_VALUE_COLUMNS if c in events_df.columns]
+    bad_row = events_df[present].isna().any(axis=1)
+    if "session_id" in events_df.columns and events_df["session_id"].notna().any():
+        bad_sessions = set(events_df.loc[bad_row, "session_id"].dropna())
+        return bad_row | events_df["session_id"].isin(bad_sessions)
+    keys = ["player_id", "scenario_type"]
+    bad_keys = set(map(tuple, events_df.loc[bad_row, keys].dropna().to_numpy()))
+    in_bad_group = events_df[keys].apply(tuple, axis=1).isin(bad_keys)
+    return bad_row | in_bad_group
+
+
+def build_feature_table(events_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate raw event logs into one feature row per session.
+
+    Applies all ``compute_*`` functions to each session and assembles the
+    results into a tidy feature table. A session is one ``session_id`` when
+    that column is present (so a student who replays the same scenario gets
+    one row per attempt), otherwise one ``(player_id, scenario_type)`` pair
+    for legacy logs without session ids.
+
+    Sessions with a blank value in a required column are skipped with a
+    warning instead of being scored; their ids are listed in
+    ``feature_df.attrs["incomplete_sessions"]``.
 
     Args:
         events_df: Full raw event log (output of
@@ -430,16 +497,33 @@ def build_feature_table(events_df: pd.DataFrame) -> pd.DataFrame:
             :data:`~midrr_classifier.data_schema.RAW_LOG_SCHEMA`.
 
     Returns:
-        A :class:`pandas.DataFrame` with one row per player × run and
-        columns matching
-        :data:`~midrr_classifier.data_schema.FEATURE_SCHEMA`.
+        A :class:`pandas.DataFrame` with one row per session and columns
+        matching :data:`~midrr_classifier.data_schema.FEATURE_SCHEMA`, plus
+        ``session_id`` (``None`` for legacy logs).
     """
     records: list[dict] = []
 
-    groups = events_df.groupby(["player_id", "scenario_type"], sort=False)
-    logger.info("Building features for %d player×run groups.", len(groups))
+    incomplete = find_incomplete_sessions(events_df)
+    incomplete_ids: list[str] = []
+    if incomplete.any():
+        id_col = "session_id" if "session_id" in events_df.columns else "player_id"
+        incomplete_ids = sorted(map(str, events_df.loc[incomplete, id_col].dropna().unique()))
+        logger.warning(
+            "Skipping %d incomplete session(s) with blank required values (%s): %s",
+            len(incomplete_ids), ", ".join(REQUIRED_VALUE_COLUMNS), incomplete_ids,
+        )
+        events_df = events_df[~incomplete]
 
-    for (player_id, scenario_type), group in groups:
+    has_session_id = "session_id" in events_df.columns
+    group_keys = ["player_id", "scenario_type"] + (["session_id"] if has_session_id else [])
+    # dropna=False: a legacy row with no session_id must still be scored, not
+    # silently vanish from the groupby.
+    groups = events_df.groupby(group_keys, sort=False, dropna=False)
+    logger.info("Building features for %d session groups.", len(groups))
+
+    for keys, group in groups:
+        player_id, scenario_type = keys[0], keys[1]
+        session_id = keys[2] if has_session_id and pd.notna(keys[2]) else None
         label = (
             group["preparedness_level"].iloc[0]
             if "preparedness_level" in group.columns
@@ -451,6 +535,7 @@ def build_feature_table(events_df: pd.DataFrame) -> pd.DataFrame:
 
         record: dict = {
             "player_id": player_id,
+            "session_id": session_id,
             "scenario_type": scenario_type,
             "decision_latency": compute_decision_latency(group),
             "spray_accuracy": compute_spray_accuracy(group),
@@ -467,5 +552,19 @@ def build_feature_table(events_df: pd.DataFrame) -> pd.DataFrame:
         records.append(record)
 
     feature_df = pd.DataFrame(records)
+
+    # Impossible values (e.g. a negative duration from bad timestamps) must not
+    # reach features.csv / training — skip and report, like incomplete sessions.
+    out_of_range = find_out_of_range_rows(feature_df)
+    invalid_ids: list[str] = []
+    if out_of_range:
+        for idx, feats in out_of_range.items():
+            row = feature_df.loc[idx]
+            invalid_ids.append(str(row["session_id"] if row["session_id"] is not None else row["player_id"]))
+            logger.warning("Skipping session %s: out-of-range feature(s) %s", invalid_ids[-1], feats)
+        feature_df = feature_df.drop(index=list(out_of_range)).reset_index(drop=True)
+
+    feature_df.attrs["incomplete_sessions"] = incomplete_ids
+    feature_df.attrs["invalid_sessions"] = invalid_ids
     logger.info("Feature table built: %d rows × %d columns.", *feature_df.shape)
     return feature_df

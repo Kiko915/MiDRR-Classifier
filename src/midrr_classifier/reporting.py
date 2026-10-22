@@ -71,6 +71,16 @@ def load_metrics(metrics_path: str) -> dict[str, Any]:
         return json.load(fh)
 
 
+def _provenance_suffix(metrics: dict[str, Any]) -> str:
+    """Title tag so a synthetic-data figure can't be mistaken for real results."""
+    source = metrics.get("data_provenance", {}).get("source")
+    if source == "synthetic":
+        return " [SYNTHETIC DATA]"
+    if source == "mixed":
+        return " [INCLUDES SYNTHETIC DATA]"
+    return ""
+
+
 def plot_confusion_matrix_figure(metrics: dict[str, Any], save_path: str) -> str:
     """Render the confusion-matrix heatmap from ``metrics["test"]`` alone.
 
@@ -115,6 +125,7 @@ def plot_confusion_matrix_figure(metrics: dict[str, Any], save_path: str) -> str
     ax.set_ylabel("Actual")
     ax.set_title(
         f"Confusion Matrix (n={test['n_samples']}, accuracy={test['accuracy']:.1%})"
+        + _provenance_suffix(metrics)
     )
     fig.tight_layout()
 
@@ -178,7 +189,7 @@ def plot_feature_importance_figure(metrics: dict[str, Any], save_path: str) -> s
     axes[1].set_title("Gini (Mean Decrease in Impurity)")
     axes[1].grid(axis="x", alpha=0.3)
 
-    fig.suptitle("Feature Importance — Permutation vs. Gini Cross-Check")
+    fig.suptitle("Feature Importance — Permutation vs. Gini Cross-Check" + _provenance_suffix(metrics))
     fig.tight_layout()
 
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
@@ -242,7 +253,10 @@ def plot_cv_variance_figure(metrics: dict[str, Any], save_path: str) -> str:
     ax.set_ylabel("Score")
     ax.set_ylim(0, 1.05)
     ax.grid(axis="y", alpha=0.3)
-    ax.set_title(f"Grouped {cv['n_splits']}-Fold CV — Mean ± Std (dots = individual folds)")
+    ax.set_title(
+        f"Grouped {cv['n_splits']}-Fold CV — Mean ± Std (dots = individual folds)"
+        + _provenance_suffix(metrics)
+    )
     fig.tight_layout()
 
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)

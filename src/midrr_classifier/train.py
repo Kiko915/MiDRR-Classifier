@@ -42,7 +42,7 @@ from midrr_classifier.model_selection import (
     tune_hyperparameters,
 )
 from midrr_classifier.utils.logging_utils import get_logger, setup_root_logging
-from midrr_classifier.utils.metrics import update_metrics_json
+from midrr_classifier.utils.metrics import describe_data_provenance, update_metrics_json
 
 logger = get_logger(__name__)
 
@@ -118,7 +118,13 @@ def main(
     y_train = train_df[cfg.label_col].to_numpy()
     groups_train = train_df["player_id"].to_numpy()
 
-    report: dict = {}
+    # Where the training data came from (synthetic / real / mixed). Written
+    # into metrics.json and stamped on the saved model so every downstream
+    # artifact — figures, API responses — can say so.
+    provenance = describe_data_provenance(df)
+    if provenance["source"] in ("synthetic", "mixed"):
+        logger.warning("Training data provenance: %s — %s", provenance["source"], provenance["note"])
+    report: dict = {"data_provenance": provenance}
 
     # ------------------------------------------------------------------
     # 3. Grouped cross-validation (baseline floor: mean +/- std)
@@ -141,6 +147,9 @@ def main(
     classifier = MiDRRClassifier(cfg)
     classifier.build_model()
     classifier.fit(X_train, y_train)
+    # Plain attribute on the fitted estimator, so it is pickled with the model
+    # and inference.py can report it without a separate sidecar file.
+    classifier.model.midrr_data_provenance_ = provenance["source"]
 
     train_acc = accuracy_score(y_train, classifier.predict(X_train))
     logger.info("Final-fit training accuracy: %.4f", train_acc)

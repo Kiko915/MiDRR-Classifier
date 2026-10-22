@@ -351,3 +351,130 @@ def test_build_feature_table_fire_and_earthquake_dispatch_differently(
     for col in ("spray_accuracy", "resource_utilization"):
         assert np.isfinite(fire_row[col])
         assert np.isfinite(quake_row[col])
+
+
+# ---------------------------------------------------------------------------
+# Testing-instrument regressions (D-001 IN-02, D-004 DF-09, D-005 DF-01)
+# ---------------------------------------------------------------------------
+
+
+def _ticks(player_id: str, scenario_type: str, distances: list[float], start: float = 1.0) -> list[pd.DataFrame]:
+    return [_row(player_id, scenario_type, start + i, "move", float(i), 0.0, d) for i, d in enumerate(distances)]
+
+
+def test_hazard_avoidance_counts_only_move_ticks() -> None:
+    # 7 safe + 3 unsafe ticks; the session_start/assembly event rows are not timesteps.
+    rows = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0)]
+    rows += _ticks("p1", "fire", [10.0] * 7 + [2.0] * 3)
+    rows += [_row("p1", "fire", 11.0, "assembly_area_reached", 10.0, 0.0, 10.0)]
+    assert compute_hazard_avoidance_ratio(pd.concat(rows, ignore_index=True)) == pytest.approx(0.7)
+
+
+def test_hazard_avoidance_ignores_post_assembly_ticks() -> None:
+    rows = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0)]
+    rows += _ticks("p1", "fire", [10.0] * 7 + [2.0] * 3)
+    rows += [_row("p1", "fire", 11.0, "assembly_area_reached", 10.0, 0.0, 10.0)]
+    rows += _ticks("p1", "fire", [1.0] * 10, start=12.0)  # wandering back toward the fire
+    assert compute_hazard_avoidance_ratio(pd.concat(rows, ignore_index=True)) == pytest.approx(0.7)
+
+
+def test_hazard_avoidance_excludes_blank_distances() -> None:
+    rows = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0)]
+    rows += _ticks("p1", "fire", [10.0] * 7 + [2.0] * 3 + [np.nan] * 4)
+    df = pd.concat(rows, ignore_index=True)
+    assert compute_hazard_avoidance_ratio(df) == pytest.approx(0.7)
+
+
+def test_build_feature_table_one_row_per_session() -> None:
+    # Same student, same scenario, two attempts -> two rows, not one merged row.
+    first = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0, session_id="S-A"),
+             _row("p1", "fire", 1.0, "door_open", 0.0, 0.0, 10.0, session_id="S-A"),
+             _row("p1", "fire", 20.0, "assembly_area_reached", 5.0, 0.0, 10.0, session_id="S-A")]
+    retry = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0, session_id="S-B"),
+             _row("p1", "fire", 9.0, "door_open", 0.0, 0.0, 10.0, session_id="S-B"),
+             _row("p1", "fire", 90.0, "assembly_area_reached", 5.0, 0.0, 10.0, session_id="S-B")]
+    feature_df = build_feature_table(pd.concat(first + retry, ignore_index=True))
+    assert len(feature_df) == 2
+    by_session = feature_df.set_index("session_id")
+    assert by_session.loc["S-A", "evacuation_time"] == 20.0
+    assert by_session.loc["S-B", "evacuation_time"] == 90.0
+    assert by_session.loc["S-B", "decision_latency"] == 9.0
+
+
+def test_build_feature_table_without_session_id_keeps_legacy_grouping(multi_player_events: pd.DataFrame) -> None:
+    feature_df = build_feature_table(multi_player_events)
+    assert feature_df["session_id"].isna().all()
+
+
+def test_build_feature_table_skips_session_with_blank_required_value() -> None:
+    good = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0, session_id="ok"),
+            _row("p1", "fire", 5.0, "assembly_area_reached", 5.0, 0.0, 10.0, session_id="ok")]
+    bad = [_row("p2", "fire", 0.0, "session_start", 0.0, 0.0, 10.0, session_id="broken"),
+           _row("p2", "fire", np.nan, "assembly_area_reached", 5.0, 0.0, 10.0, session_id="broken")]
+    feature_df = build_feature_table(pd.concat(good + bad, ignore_index=True))
+    assert list(feature_df["session_id"]) == ["ok"]
+    assert feature_df.attrs["incomplete_sessions"] == ["broken"]
+
+
+# ---------------------------------------------------------------------------
+# Testing-instrument Minor regressions (D-006 DF-11, D-007 DF-10, D-009 DF-03)
+# ---------------------------------------------------------------------------
+
+
+def test_earthquake_interaction_frequency_counts_emergency_exit() -> None:
+    quake = pd.concat([
+        _row("p", "earthquake", 0.0, "session_start", 0.0, 0.0, 10.0),
+        _row("p", "earthquake", 2.0, "drop_cover_hold", 0.0, 0.0, 10.0),
+        _row("p", "earthquake", 8.0, "emergency_exit", 0.0, 0.0, 10.0),
+        _row("p", "earthquake", 10.0, "assembly_area_reached", 0.0, 0.0, 10.0),
+    ], ignore_index=True)
+    # drop_cover_hold + emergency_exit + assembly = 3 events over 10 s.
+    assert compute_interaction_frequency(quake) == pytest.approx(0.3)
+
+
+def test_earthquake_interaction_frequency_ignores_fire_only_events() -> None:
+    quake = pd.concat([
+        _row("p", "earthquake", 0.0, "session_start", 0.0, 0.0, 10.0),
+        _row("p", "earthquake", 1.0, "door_open", 0.0, 0.0, 10.0),
+        _row("p", "earthquake", 2.0, "fire_alarm_activate", 0.0, 0.0, 10.0),
+        _row("p", "earthquake", 10.0, "assembly_area_reached", 0.0, 0.0, 10.0),
+    ], ignore_index=True)
+    assert compute_interaction_frequency(quake) == pytest.approx(0.1)  # only the assembly event
+
+
+def test_fire_interaction_frequency_unchanged_by_earthquake_set() -> None:
+    fire = pd.concat([
+        _row("p", "fire", 0.0, "session_start", 0.0, 0.0, 10.0),
+        _row("p", "fire", 1.0, "emergency_exit", 0.0, 0.0, 10.0),  # not a fire interaction
+        _row("p", "fire", 2.0, "door_open", 0.0, 0.0, 10.0),
+        _row("p", "fire", 10.0, "assembly_area_reached", 0.0, 0.0, 10.0),
+    ], ignore_index=True)
+    assert compute_interaction_frequency(fire) == pytest.approx(0.2)
+
+
+def test_evacuation_time_subtracts_sim_start() -> None:
+    late_clock = pd.concat([
+        _row("p", "fire", 5.0, "session_start", 0.0, 0.0, 10.0),
+        _row("p", "fire", 45.0, "assembly_area_reached", 0.0, 0.0, 10.0),
+    ], ignore_index=True)
+    assert compute_evacuation_time(late_clock) == pytest.approx(40.0)
+
+
+def test_evacuation_time_uses_earliest_event_when_no_session_start() -> None:
+    rows = pd.concat([
+        _row("p", "fire", 2.0, "move", 0.0, 0.0, 10.0),
+        _row("p", "fire", 12.0, "assembly_area_reached", 0.0, 0.0, 10.0),
+    ], ignore_index=True)
+    assert compute_evacuation_time(rows) == pytest.approx(10.0)
+
+
+def test_build_feature_table_skips_session_with_negative_duration() -> None:
+    good = [_row("p1", "fire", 0.0, "session_start", 0.0, 0.0, 10.0, session_id="ok"),
+            _row("p1", "fire", 5.0, "assembly_area_reached", 5.0, 0.0, 10.0, session_id="ok")]
+    # Assembly logged BEFORE the session started -> negative evacuation_time.
+    bad = [_row("p2", "fire", 0.0, "session_start", 0.0, 0.0, 10.0, session_id="neg"),
+           _row("p2", "fire", -30.0, "assembly_area_reached", 5.0, 0.0, 10.0, session_id="neg")]
+    feature_df = build_feature_table(pd.concat(good + bad, ignore_index=True))
+    assert list(feature_df["session_id"]) == ["ok"]
+    assert feature_df.attrs["invalid_sessions"] == ["neg"]
+    assert (feature_df["evacuation_time"] >= 0).all()

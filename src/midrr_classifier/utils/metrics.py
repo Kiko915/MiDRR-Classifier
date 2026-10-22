@@ -110,6 +110,34 @@ def compute_classification_metrics(
     }
 
 
+SYNTHETIC_NOTE = (
+    "SYNTHETIC development data: procedurally generated sessions, not real "
+    "students. Metrics show the pipeline works; they are not evidence of "
+    "real-learner validity."
+)
+
+
+def describe_data_provenance(df: Any, label_source_col: str = "label_source") -> dict[str, Any]:
+    """Summarise where a feature table's rows came from, for metrics.json.
+
+    ``source`` is ``"synthetic"`` (every row synthetic), ``"mixed"`` (some
+    synthetic), ``"real"`` (label_source present, none synthetic) or
+    ``"unknown"`` (no label_source information at all).
+    """
+    if label_source_col not in df.columns or df[label_source_col].isna().all():
+        return {"source": "unknown", "label_source_counts": {}, "note": "No label_source column — provenance unknown."}
+
+    counts = {str(k): int(v) for k, v in df[label_source_col].fillna("none").value_counts().items()}
+    n_synth = counts.get("synthetic", 0)
+    if n_synth == len(df):
+        source, note = "synthetic", SYNTHETIC_NOTE
+    elif n_synth:
+        source, note = "mixed", "Mixed synthetic and real rows — report real-data results separately."
+    else:
+        source, note = "real", "No synthetic rows."
+    return {"source": source, "label_source_counts": counts, "note": note}
+
+
 def update_metrics_json(path: str, updates: dict[str, Any]) -> dict[str, Any]:
     """Merge *updates* into the metrics JSON at *path* and write it back.
 
@@ -168,6 +196,7 @@ def plot_confusion_matrix(
     y_pred: np.ndarray,
     labels: list[str],
     save_path: Optional[str] = None,
+    title: str = "MiDRR-Classifier — Confusion Matrix",
 ) -> None:
     """Plot and optionally save a seaborn confusion-matrix heatmap.
 
@@ -177,6 +206,7 @@ def plot_confusion_matrix(
         labels: Ordered class names for axis ticks.
         save_path: If provided, the PNG is saved to this path instead of
             being displayed interactively.
+        title: Figure title (evaluate.py appends a SYNTHETIC tag when needed).
     """
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -197,7 +227,7 @@ def plot_confusion_matrix(
     )
     ax.set_xlabel("Predicted")
     ax.set_ylabel("Actual")
-    ax.set_title("MiDRR-Classifier — Confusion Matrix")
+    ax.set_title(title)
     fig.tight_layout()
 
     if save_path:

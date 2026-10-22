@@ -118,3 +118,9 @@ def test_synthetic_spray_accuracy_separates_skill_levels(synthetic_feature_table
     fire_rows = synthetic_feature_table[synthetic_feature_table["scenario_type"] == "fire"]
     means = fire_rows.groupby("preparedness_level")["spray_accuracy"].mean()
     assert means["HIGH"] > means["MODERATE"] > means["LOW"]
+
+
+def test_synthetic_label_source_survives_feature_engineering() -> None:
+    feature_df = build_feature_table(generate_logs(n_per_class=1, seed=0))
+    assert (feature_df["label_source"] == "synthetic").all()
+    assert feature_df["session_id"].notna().all()

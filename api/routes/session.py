@@ -36,7 +36,7 @@ class SessionEvent(BaseModel):
     since the streaming payload is intentionally sparse per event.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", allow_inf_nan=False)
 
     timestamp: float
     event_type: str

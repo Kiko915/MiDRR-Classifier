@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FeaturesRequest(BaseModel):
@@ -19,7 +19,16 @@ class FeaturesRequest(BaseModel):
     ``feature_engineering.build_feature_table()`` (v1.2, post-BFP-consultation
     9-feature contract — fire computation; see FEATURE_DEFINITIONS in
     ``data_schema.py`` for the earthquake analog of each).
+
+    ``allow_inf_nan=False``: the JSON literals ``Infinity``/``NaN`` would
+    otherwise pass the ``ge``/``le`` checks and crash scikit-learn with a 500.
+    ``extra="forbid"``: an unknown field (a renamed or 10th feature) is a
+    contract mismatch and gets a 422 instead of being silently dropped.
+    The ge/le bounds mirror ``data_schema.FEATURE_VALUE_RANGES`` (kept in
+    sync by a test).
     """
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
 
     player_id: str = Field(..., description="Unique player / student identifier.")
     scenario_type: str = Field(
@@ -59,3 +68,10 @@ class PredictResponse(BaseModel):
         ..., description="Feature importance weights, sorted highest first."
     )
     resultText: str = Field(..., description="Human-readable adaptive feedback for the student.")
+    dataProvenance: str = Field(
+        "unknown",
+        description=(
+            "Source of the data the serving model was trained on: 'synthetic', 'real', "
+            "'mixed', or 'unknown'. 'synthetic' predictions are placeholders, not real-learner results."
+        ),
+    )

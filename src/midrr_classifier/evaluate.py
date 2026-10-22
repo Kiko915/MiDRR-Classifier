@@ -30,6 +30,7 @@ from midrr_classifier.model_definition import MiDRRClassifier
 from midrr_classifier.utils.logging_utils import get_logger, setup_root_logging
 from midrr_classifier.utils.metrics import (
     compute_full_metrics,
+    describe_data_provenance,
     plot_confusion_matrix,
     print_classification_report,
     update_metrics_json,
@@ -130,6 +131,11 @@ def evaluate_model(
     )
     _log_importance_sanity_check(importances["ranking_permutation"])
 
+    test_provenance = describe_data_provenance(test_df)
+    test_metrics["data_provenance"] = test_provenance
+    if test_provenance["source"] == "synthetic":
+        logger.warning("Evaluation set is SYNTHETIC — %s", test_provenance["note"])
+
     result: dict[str, Any] = {"test": test_metrics, "importances": importances}
 
     # ------------------------------------------------------------------
@@ -138,7 +144,10 @@ def evaluate_model(
     if persist:
         cm_path = cfg.confusion_matrix_path
         os.makedirs(os.path.dirname(cm_path) or ".", exist_ok=True)
-        plot_confusion_matrix(y_test, y_pred, labels=LABEL_CLASSES, save_path=cm_path)
+        title = "MiDRR-Classifier — Confusion Matrix"
+        if test_provenance["source"] == "synthetic":
+            title += " [SYNTHETIC DATA]"
+        plot_confusion_matrix(y_test, y_pred, labels=LABEL_CLASSES, save_path=cm_path, title=title)
         logger.info("Confusion matrix saved to %s", cm_path)
 
         update_metrics_json(cfg.metrics_path, result)

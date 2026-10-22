@@ -15,7 +15,10 @@ import pandas as pd
 from sklearn.model_selection import train_test_split as _sklearn_split
 
 from midrr_classifier.data_schema import (
+    EVENT_TYPES,
     RAW_LOG_SCHEMA,
+    SYNTHETIC_LABEL_SOURCE,
+    validate_feature_ranges,
     validate_feature_schema,
     validate_raw_schema,
 )
@@ -103,8 +106,32 @@ def load_raw_logs(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     df = normalize_raw_log(df)
     validate_raw_schema(df)
+    flag_unknown_event_types(df)
     logger.info("Loaded %d event rows from %s", len(df), path)
     return df
+
+
+def flag_unknown_event_types(df: pd.DataFrame) -> list[str]:
+    """Warn about ``event_type`` values outside the contract vocabulary.
+
+    Unknown events are kept (no feature counts them, so they cannot distort
+    a score), but they usually mean the mod and this repo disagree on an
+    event name — the classic silent-rename bug. They are logged and listed in
+    ``df.attrs["unknown_event_types"]`` so the caller can see them.
+
+    Returns:
+        Sorted list of unknown event_type values (empty if none).
+    """
+    unknown = sorted(set(df["event_type"].dropna().astype(str)) - EVENT_TYPES)
+    df.attrs["unknown_event_types"] = unknown
+    if unknown:
+        counts = df["event_type"].isin(unknown).sum()
+        logger.warning(
+            "%d row(s) carry event_type values not in the telemetry contract "
+            "(EVENT_TYPES): %s — check for a renamed/new mod event.",
+            counts, unknown,
+        )
+    return unknown
 
 
 def load_feature_table(path: str) -> pd.DataFrame:
@@ -121,7 +148,8 @@ def load_feature_table(path: str) -> pd.DataFrame:
 
     Raises:
         FileNotFoundError: If the CSV does not exist at *path*.
-        ValueError: If required columns are missing (schema validation).
+        ValueError: If required columns are missing (schema validation), or
+            any feature value is non-finite / outside FEATURE_VALUE_RANGES.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"Feature table not found: {path}")
@@ -129,6 +157,7 @@ def load_feature_table(path: str) -> pd.DataFrame:
     logger.info("Loading feature table from %s", path)
     df = pd.read_csv(path)
     validate_feature_schema(df)
+    validate_feature_ranges(df)
     logger.info("Loaded %d feature rows from %s", len(df), path)
     return df
 
@@ -206,6 +235,7 @@ def _sessions_table_to_raw_log(sessions_df: pd.DataFrame, expert_col: str) -> pd
 
     raw_df = normalize_raw_log(raw_df)
     validate_raw_schema(raw_df)
+    flag_unknown_event_types(raw_df)
     logger.info(
         "Turso ingestion: %d sessions exploded into %d raw-log rows.",
         len(sessions_df), len(raw_df),
@@ -425,8 +455,14 @@ def split_train_test(
         label_source_col in df.columns and df[label_source_col].notna().any()
     )
     if enforce_expert_only_test and has_label_source_info:
+        # A fully synthetic dataset has ground-truth labels by construction, so
+        # it may be scored on its own synthetic test split (results are tagged
+        # synthetic downstream). Once any real row is present, only expert
+        # labels are allowed in the test split.
+        all_synthetic = (df[label_source_col] == SYNTHETIC_LABEL_SOURCE).all()
+        allowed = SYNTHETIC_LABEL_SOURCE if all_synthetic else "expert"
         pre_count = len(test_df)
-        test_df = test_df[test_df[label_source_col] == "expert"].reset_index(drop=True)
+        test_df = test_df[test_df[label_source_col] == allowed].reset_index(drop=True)
         dropped = pre_count - len(test_df)
         if dropped:
             logger.warning(

@@ -190,3 +190,75 @@ def test_delete_session_closes_buffer(fresh_predictor: StreamingPredictor) -> No
     result = session_route.delete_session("sess_3")
     assert result == {"status": "closed", "session_id": "sess_3"}
     assert fresh_predictor.active_session_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Testing-instrument regressions (D-002 RF-05, D-003 MR-09)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("literal", ["Infinity", "-Infinity", "NaN"])
+def test_features_request_rejects_non_finite_numbers(literal: str) -> None:
+    # Python's JSON parser accepts these literals; they used to pass ge=0 and
+    # crash scikit-learn with an HTTP 500.
+    payload = '{"player_id": "stu_1", "scenario_type": "fire", ' + ", ".join(
+        f'"{k}": {literal if k == "evacuation_time" else v}' for k, v in _NINE_FEATURES.items()
+    ) + "}"
+    with pytest.raises(ValueError):
+        FeaturesRequest.model_validate_json(payload)
+
+
+def test_session_event_rejects_non_finite_numbers() -> None:
+    with pytest.raises(ValueError):
+        session_route.SessionEvent.model_validate_json('{"timestamp": 1.0, "event_type": "move", "x": NaN}')
+
+
+def test_predict_reports_model_data_provenance(stub_prediction, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _synthetic(features_row, model_path=None, config_path=None):
+        return {**stub_prediction(features_row), "data_provenance": "synthetic"}
+
+    monkeypatch.setattr(predict_route, "predict_preparedness_full", _synthetic)
+    assert predict_route.predict(_make_body()).dataProvenance == "synthetic"
+
+
+def test_predict_provenance_defaults_to_unknown(stub_prediction) -> None:
+    assert predict_route.predict(_make_body()).dataProvenance == "unknown"
+
+
+def test_validation_error_body_is_json_safe_for_non_finite_input() -> None:
+    # FastAPI's default 422 handler echoes the rejected input; for inf/nan that
+    # made the error response itself unencodable (HTTP 500).
+    import asyncio
+    import json
+
+    from fastapi.exceptions import RequestValidationError
+
+    from api.main import validation_error_handler
+
+    exc = RequestValidationError(
+        [{"type": "finite_number", "loc": ("body", "evacuation_time"), "msg": "Input should be a finite number", "input": float("inf")}]
+    )
+    response = asyncio.run(validation_error_handler(None, exc))
+    assert response.status_code == 422
+    assert json.loads(response.body)["detail"][0]["input"] == "inf"
+
+
+# ---------------------------------------------------------------------------
+# Testing-instrument Minor regressions (D-008 RF-03) + range-contract sync (D-010)
+# ---------------------------------------------------------------------------
+
+
+def test_features_request_rejects_unknown_extra_field() -> None:
+    with pytest.raises(ValueError):
+        FeaturesRequest(player_id="stu_1", scenario_type="fire", heart_rate=88.0, **_NINE_FEATURES)
+
+
+def test_api_bounds_match_feature_value_ranges() -> None:
+    # api/schemas.py (ge/le) and data_schema.FEATURE_VALUE_RANGES must not drift:
+    # the API rejects the same values the training loader rejects.
+    from midrr_classifier.data_schema import FEATURE_VALUE_RANGES
+
+    for feat, (lo, hi) in FEATURE_VALUE_RANGES.items():
+        meta = {type(m).__name__: m for m in FeaturesRequest.model_fields[feat].metadata}
+        assert (meta["Ge"].ge if "Ge" in meta else None) == lo, feat
+        assert (meta["Le"].le if "Le" in meta else None) == hi, feat
